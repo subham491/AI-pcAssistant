@@ -21,6 +21,19 @@ def test_speech_then_silence_ends_utterance():
     assert audio.dtype == np.float32 and audio.size > 10 * FRAME_SAMPLES and np.abs(audio).max() <= 1.0
 
 
+def test_audio_keeps_the_moment_before_speech_was_detected():
+    # A soft first sound ("h" in "hello") is below the speech level; without real pre-roll it is
+    # cut off and Whisper drops or garbles the first word.
+    ep = Endpointer(EndpointerConfig(preroll_s=0.3, min_speech_s=0.25))
+    for _ in range(10):
+        ep.feed(np.full(FRAME_SAMPLES, 7, dtype=np.int16))  # quiet lead-in, marked with the value 7
+    for _ in range(6):
+        ep.feed(frame(3000))
+    audio = np.round(ep.audio() * 32768).astype(np.int16)
+    lead_in = int(np.count_nonzero(audio == 7)) / FRAME_SAMPLES
+    assert lead_in >= 3  # about 0.24 s of audio from before the first speech frame
+
+
 def test_no_speech_times_out():
     ep = Endpointer(EndpointerConfig(no_speech_timeout_s=0.8))
     states = [ep.feed(frame(50)) for _ in range(12)]

@@ -69,9 +69,12 @@ def run_gui(cfg: Config) -> int:
     capturer = ScreenCapturer(cfg.capture, cfg.logs_dir / "screenshots")
     orch = Orchestrator(cfg, sink, speaker, capturer)
     core = CoreThread(orch)
-    core.start()
 
+    # Build the UI before the core starts: the core's first status and mode updates are
+    # signals, and a signal sent before anything is connected is lost ("Starting…" forever).
     overlay = Overlay(orch, sink, cfg.home)
+    tray = Tray(orch, overlay, sink, cfg.home, lambda: quit_app())
+    core.start()
 
     class Bridge(QObject):
         toggle = Signal()
@@ -96,7 +99,6 @@ def run_gui(cfg: Config) -> int:
         stt_pool.shutdown(wait=False, cancel_futures=True)
         app.quit()
 
-    tray = Tray(orch, overlay, sink, cfg.home, quit_app)
     tray.show()
     overlay.show()
     tray.showMessage("PC co-worker", _hint(cfg), msecs=6000)
@@ -104,24 +106,35 @@ def run_gui(cfg: Config) -> int:
 
 
 def _hint(cfg: Config) -> str:
-    wake = f"say “{cfg.voice.wake_word_model.replace('_', ' ')}” or " if cfg.voice.enabled and cfg.voice.wake_word_enabled else ""
+    word = cfg.voice.wake_phrase or cfg.voice.wake_word_model.replace("_", " ")
+    wake = f"say “{word}” or " if cfg.voice.enabled and cfg.voice.wake_word_enabled else ""
     return f"Ready. {wake}press {cfg.hotkeys.talk} to talk; {cfg.hotkeys.stop} stops everything."
 
 
 def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoolExecutor):  # type: ignore[no-untyped-def]
-    from .voice.listener import CallDetector, Listener
+    from .intents import strip_wake_phrase
+    from .voice.listener import CallDetector, Listener, beep
     from .voice.stt import SpeechToText
 
     stt = SpeechToText(cfg.voice)
     pool.submit(stt.load)  # warm the model in the background (first run downloads it)
 
-    def transcribe_and_submit(audio: np.ndarray) -> None:
+    def transcribe_and_submit(audio: np.ndarray, needs_wake: bool) -> None:
         try:
             text = stt.transcribe(audio)
         except Exception as exc:  # noqa: BLE001
             log.exception("transcription failed")
             sink.status("error", f"Speech-to-text failed: {exc}")
             return
+        if needs_wake:  # room speech: ours only if it starts with the wake phrase
+            rest = strip_wake_phrase(text, cfg.voice.wake_phrase)
+            if rest is None:
+                return
+            if not rest:
+                listener.trigger()  # just the wake phrase: beep and take the command
+                return
+            beep(660, 70)  # heard you
+            text = rest
         if text:
             orch.submit_text_threadsafe(text, "voice")
         else:
@@ -130,7 +143,7 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
     states = {"listening": "Listening…", "transcribing": "Transcribing…", "idle": "Ready"}
     listener = Listener(
         cfg.voice,
-        on_utterance=lambda audio: pool.submit(transcribe_and_submit, audio),
+        on_utterance=lambda audio, needs_wake: pool.submit(transcribe_and_submit, audio, needs_wake),
         on_state=lambda s: sink.status(s, states.get(s, s)),
         is_speaking=lambda: speaker.speaking,
         wake_muted=CallDetector(cfg.voice.mute_wake_when_mic_used_by),

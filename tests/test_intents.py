@@ -1,7 +1,26 @@
 import pytest
 
 from assistant.config import EditMode
-from assistant.intents import Kind, TargetKind, parse, screen_target
+from assistant.intents import Kind, TargetKind, parse, screen_target, strip_wake_phrase
+
+
+@pytest.mark.parametrize("text, rest", [
+    ("Hellbot, what time is it?", "what time is it?"),
+    ("Hell bot open notepad", "open notepad"),  # Whisper may split or misspell the word
+    ("Helbot stop!", "stop!"),
+    ("Hello bot what's up", "what's up"),
+    ("Hellbot.", ""),  # just the wake phrase: the app then listens for the command
+    ("Hello, how are you doing today?", None),  # close, but not the wake phrase
+    ("Can you help me with the report?", None),
+    ("", None),
+])
+def test_strip_wake_phrase(text, rest):
+    assert strip_wake_phrase(text, "hellbot") == rest
+
+
+def test_strip_wake_phrase_with_several_words():
+    assert strip_wake_phrase("Hey computer, do it", "hey computer") == "do it"
+    assert strip_wake_phrase("Hey there", "hey computer") is None
 
 
 @pytest.mark.parametrize("text, kind", [

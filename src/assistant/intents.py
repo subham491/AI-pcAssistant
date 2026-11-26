@@ -9,6 +9,7 @@ Pure functions only, so all of this is unit-tested.
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -96,6 +97,25 @@ def parse(text: str) -> Intent:
     if m:
         return Intent(Kind.REMEMBER, m.group("fact").strip().rstrip("."))
     return Intent(Kind.TURN, text.strip())
+
+
+def strip_wake_phrase(text: str, phrase: str, min_ratio: float = 0.85) -> str | None:
+    """The rest of `text` if it starts with the wake phrase, else None.
+
+    Fuzzy on purpose: Whisper may write "Hell bot" or "Helbot" for "Hellbot".
+    0.85 keeps "hello" out while letting those spellings in.
+    """
+    key = re.sub(r"[\W_]", "", phrase.lower())
+    words = text.split()
+    best_n, best = 0, 0.0
+    for n in range(1, min(len(words), len(phrase.split()) + 1) + 1):
+        head = re.sub(r"[\W_]", "", "".join(words[:n]).lower())
+        ratio = difflib.SequenceMatcher(None, head, key).ratio()
+        if ratio > best:
+            best_n, best = n, ratio
+    if not key or best < min_ratio:
+        return None
+    return " ".join(words[best_n:]).lstrip(" ,.!?:;-")
 
 
 def _strip_wake(text: str) -> str:

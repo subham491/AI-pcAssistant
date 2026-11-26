@@ -12,6 +12,7 @@ auth_mode = "subscription"
 # wake_word_enabled = true
 # wake_word_model = "hey_jarvis"   # pre-trained openWakeWord model, or a path to your .onnx
 # wake_word_threshold = 0.5        # raise if it wakes by mistake, lower if it misses you
+# wake_phrase = "hellbot"          # any phrase, spotted with Whisper instead of the model above (no training)
 # stt_model = "small.en"           # tiny.en / base.en (faster), medium.en (better), "small" for other languages
 # language = "en"
 # Words Whisper should expect: project names, jargon. Biggest accuracy win.
