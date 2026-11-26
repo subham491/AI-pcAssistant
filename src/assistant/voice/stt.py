@@ -97,7 +97,8 @@ class SpeechToText:
 
     def _run(self, audio: np.ndarray) -> str:
         assert self._model is not None
-        prompt = ", ".join(self.cfg.vocabulary) or None
+        # The wake phrase is a made-up word; without the hint Whisper writes "helmet" or "Helbert".
+        prompt = ", ".join(filter(None, [*self.cfg.vocabulary, self.cfg.wake_phrase])) or None
         segments, _info = self._model.transcribe(
             audio,
             language=self.cfg.language,

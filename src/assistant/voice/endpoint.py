@@ -54,7 +54,10 @@ class Endpointer:
         self.noise = noise_floor
         frame_s = FRAME_SAMPLES / SAMPLE_RATE
         self._frame_s = frame_s
-        self._preroll: deque[np.ndarray] = deque(maxlen=max(1, round(cfg.preroll_s / frame_s)))
+        # Room for the frames that confirm speech (min_speech_s) plus preroll_s from before them.
+        # Sized for preroll_s alone, the confirming frames push all the earlier audio out, and a
+        # soft first sound ("h") is lost: Whisper then drops or garbles the first word.
+        self._preroll: deque[np.ndarray] = deque(maxlen=max(1, round((cfg.preroll_s + cfg.min_speech_s) / frame_s)))
         self.reset()
 
     def reset(self) -> None:

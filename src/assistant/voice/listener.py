@@ -47,7 +47,7 @@ class Listener:
     def __init__(
         self,
         cfg: VoiceConfig,
-        on_utterance: Callable[[np.ndarray], None],
+        on_utterance: Callable[[np.ndarray, bool], None],  # (audio, needs_wake_phrase)
         on_state: Callable[[str], None],
         is_speaking: Callable[[], bool],
         wake_muted: Callable[[], bool],
@@ -67,7 +67,7 @@ class Listener:
     def start(self) -> None:
         import sounddevice as sd
 
-        if self.cfg.wake_word_enabled:
+        if self.cfg.wake_word_enabled and not self.cfg.wake_phrase:
             try:
                 self._wake = WakeWord(self.cfg)
             except Exception:  # noqa: BLE001
@@ -101,39 +101,57 @@ class Listener:
         ep_cfg = EndpointerConfig(end_silence_s=self.cfg.end_silence_s, max_utterance_s=self.cfg.max_utterance_s,
                                   no_speech_timeout_s=self.cfg.no_speech_timeout_s)
         endpointer = Endpointer(ep_cfg)
+        phrase_mode = bool(self.cfg.wake_word_enabled and self.cfg.wake_phrase)
         capturing = False
+        # Wake-phrase mode: room speech is captured quietly and handed to STT, which keeps it
+        # only if it starts with the phrase. `ambient` marks such a capture (no beep, no status).
+        # shortcut: continuous talk (TV, music) is transcribed in max_utterance_s chunks and
+        # dropped; add a cheaper pre-filter if that GPU use ever matters.
+        ambient = False
         while not self._closing.is_set():
             try:
                 frame = self._frames.get(timeout=0.2)
             except queue.Empty:
                 frame = None
 
-            if not capturing:
+            if not capturing or ambient:
                 woke = self._trigger.is_set()
-                if frame is not None and not woke and self._wake and not self.is_speaking() and not self.wake_muted():
+                may_listen = frame is not None and not woke and not self.is_speaking() and not self.wake_muted()
+                if may_listen and self._wake:
                     woke = self._wake.detect(frame)
+                elif may_listen and phrase_mode:
+                    if not ambient:
+                        endpointer.reset()
+                    capturing = ambient = True
                 elif frame is not None and not woke:
+                    capturing = ambient = False  # speaking or on a call: drop a half-heard capture
                     endpointer.noise = 0.95 * endpointer.noise + 0.05 * float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
                 if woke:
                     self._trigger.clear()
                     self._drain()  # drop audio queued before the wake
                     endpointer.reset()
-                    capturing = True
+                    capturing, ambient = True, False
                     beep()
                     self.on_state("listening")
-                continue
+                    continue
+                if not ambient:
+                    continue
 
             if frame is None:
                 continue
             state = endpointer.feed(frame)
             if state in (EndState.DONE, EndState.TOO_LONG):
                 capturing = False
-                beep(660, 70)
-                self.on_state("transcribing")
-                self.on_utterance(endpointer.audio())
+                if not ambient:
+                    beep(660, 70)
+                    self.on_state("transcribing")
+                self.on_utterance(endpointer.audio(), ambient)
+                ambient = False
             elif state is EndState.NO_SPEECH:
                 capturing = False
-                self.on_state("idle")
+                if not ambient:
+                    self.on_state("idle")
+                ambient = False
 
     def _drain(self) -> None:
         try:
@@ -183,7 +201,28 @@ def apps_using_microphone() -> list[str]:
             return
 
     scan(base)
+    # Windows leaves "in use" records behind when an app crashes or updates while holding the
+    # mic (old Discord versions, games). Without this check they mute the wake word forever.
+    # shortcut: only desktop apps (exe-path keys) are checked; packaged apps are trusted as-is,
+    # upgrade if a Store app ever leaves a stale record.
+    if any("#" in name for name in found):
+        try:
+            running = _running_exes()
+        except Exception:  # noqa: BLE001 - same contract as above: failures keep the wake word on
+            return []
+        found = [name for name in found if "#" not in name or exe_is_running(name, running)]
     return found
+
+
+def exe_is_running(key_name: str, running: set[str]) -> bool:
+    r"""Desktop apps are recorded by exe path with '#' in place of '\'."""
+    return key_name.replace("#", "\\").lower() in running
+
+
+def _running_exes() -> set[str]:
+    import psutil
+
+    return {p.info["exe"].lower() for p in psutil.process_iter(["exe"]) if p.info["exe"]}
 
 
 class CallDetector:

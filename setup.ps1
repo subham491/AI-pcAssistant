@@ -50,6 +50,9 @@ function Invoke-Checked {
 
 function Find-Python {
     # Prefer the py launcher with 3.12, then any python 3.11+ on PATH.
+    # Windows PowerShell 5.1 turns native stderr into a terminating error under "Stop",
+    # even with 2>$null, so probing a version that is not installed would abort setup.
+    $ErrorActionPreference = "Continue"
     if (Have "py") {
         foreach ($v in @("3.12", "3.11", "3.13")) {
             $exe = & py "-$v" -c "import sys; print(sys.executable)" 2>$null

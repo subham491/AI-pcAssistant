@@ -45,6 +45,9 @@ class VoiceConfig:
     # openWakeWord pre-trained model name, or a path to your own .onnx model.
     wake_word_model: str = "hey_jarvis"
     wake_word_threshold: float = 0.5
+    # Any phrase, e.g. "hellbot". When set, the phrase is spotted with Whisper instead of the
+    # openWakeWord model above: no training needed, and it follows your own pronunciation.
+    wake_phrase: str = ""
     stt_model: str = "small.en"  # faster-whisper size; "small" for non-English
     stt_device: str = "auto"  # auto | cuda | cpu
     stt_compute_type: str = "auto"  # auto picks float16 on CUDA, int8 on CPU

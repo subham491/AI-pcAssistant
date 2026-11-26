@@ -197,7 +197,7 @@ Most improvements need **no Python at all**:
 | A specialist helper | Add a subagent: `.claude\agents\<name>.md` (see `code-reviewer`) |
 | Jira, Drive, GitHub... | Add an MCP server/connector in Claude Code (`claude mcp add ...`) or at claude.ai |
 | Better recognition of your words | `[voice] vocabulary = [...]` in `config.toml` |
-| A different wake word | `wake_word_model` = another openWakeWord model or your own `.onnx` (openWakeWord can train one from synthetic speech) |
+| A different wake word | `wake_phrase = "hellbot"` (any phrase, no training: spotted with Whisper, say "Hellbot, what time is it" in one go or "Hellbot", beep, then speak). Or `wake_word_model` = another openWakeWord model or your own `.onnx` |
 | Faster/better speech-to-text | `stt_model` = `base.en` (faster) / `medium.en` (better) |
 | More commands to run without asking | `[safety] bash_allow_prefixes` |
 | Block more things | `[safety] extra_forbidden_commands` / `extra_forbidden_paths` (regex / path) |
