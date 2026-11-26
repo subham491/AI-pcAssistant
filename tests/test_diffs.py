@@ -36,7 +36,7 @@ def test_edit_mismatch_is_explained(tmp_path):
 
 def test_multiedit_applies_in_order(tmp_path):
     f = tmp_path / "a.txt"
-    f.write_text("one two three\n")
+    f.write_bytes(b"one two three\n")  # bytes: write_text would make CRLF on Windows
     prev = preview_edit("MultiEdit", {"edits": [{"old_string": "one", "new_string": "1"},
                                                 {"old_string": "1 two", "new_string": "1 2"}]}, f)
     assert prev.after == "1 2 three\n"
