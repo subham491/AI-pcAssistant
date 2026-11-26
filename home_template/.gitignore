@@ -1,0 +1,5 @@
+# Back up this folder with git if you like; these stay local.
+workspaces/
+inbox/
+logs/
+.state/
