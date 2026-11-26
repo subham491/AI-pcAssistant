@@ -1,8 +1,10 @@
-"""Tray icon + always-on-top overlay (PySide6).
+"""Tray icon + the answer card that opens next to the orb (PySide6).
 
-The overlay shows: status, mode badges, what you said, Claude's reply (code
-blocks get a Copy button), approval cards with the diff, an activity log, a
-text box for typing instead of talking, and a big Stop button.
+The card shows: status, mode badges, what you said, the reply (code blocks
+get a Copy button), approval cards with the diff, an activity log, a text box
+for typing instead of talking, and a big Stop button. It opens when there is
+something to read and folds away again a while after the answer; the orb
+(ui/orb.py) stays on screen.
 
 Threading: the core runs on an asyncio thread and calls the UiSink methods
 from there. QtSink turns each call into a Qt signal, which Qt delivers on the
@@ -17,8 +19,20 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QPoint, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPixmap, QTextCharFormat
+from PySide6.QtCore import QObject, QPoint, QPropertyAnimation, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QCursor,
+    QFont,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QPixmap,
+    QTextCharFormat,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -43,32 +57,37 @@ if TYPE_CHECKING:
     from ..orchestrator import Orchestrator
 
 STATE_COLORS = {
-    "idle": "#6b7280",
-    "listening": "#16a34a",
-    "transcribing": "#0891b2",
-    "thinking": "#2563eb",
-    "speaking": "#7c3aed",
-    "waiting": "#d97706",
-    "error": "#dc2626",
+    "idle": "#6c5a78",
+    "listening": "#ff4d3a",
+    "transcribing": "#ffae42",
+    "thinking": "#ffae42",
+    "speaking": "#ff5a3d",
+    "waiting": "#ffae42",
+    "error": "#ff2a2a",
 }
 
+SHORT, TALL = 440, 620  # card height: answers, and approvals with a diff
+
+# Smoke and embers, to match the orb.
 STYLE = """
-QWidget#overlay { background: rgba(24, 24, 27, 238); border-radius: 12px; }
-QLabel, QPlainTextEdit, QLineEdit { color: #e4e4e7; font-size: 10pt; }
-QLabel#transcript { color: #a1a1aa; font-style: italic; }
+QLabel, QPlainTextEdit, QLineEdit { color: #ece6f2; font-size: 10pt; }
+QLabel#name { color: #ffae42; font-weight: 700; font-size: 8.5pt; letter-spacing: 2px; }
+QLabel#transcript { color: #a99bb8; font-style: italic; }
 QLabel.badge { border-radius: 8px; padding: 2px 8px; font-weight: 600; font-size: 8.5pt; }
-QPlainTextEdit { background: #09090b; border: 1px solid #3f3f46; border-radius: 6px;
+QPlainTextEdit { background: #120c19; border: 1px solid #3a2c48; border-radius: 6px;
                  font-family: Consolas, 'Cascadia Mono', monospace; font-size: 9pt; }
-QLineEdit { background: #27272a; border: 1px solid #3f3f46; border-radius: 6px; padding: 5px; }
-QPushButton { background: #3f3f46; color: #fafafa; border: none; border-radius: 6px; padding: 5px 12px; }
-QPushButton:hover { background: #52525b; }
-QPushButton:disabled { background: #27272a; color: #71717a; }
+QLineEdit { background: #241a2e; border: 1px solid #3a2c48; border-radius: 6px; padding: 5px; }
+QLineEdit:focus { border-color: #ff5a36; }
+QPushButton { background: #3a2c48; color: #fafafa; border: none; border-radius: 6px; padding: 5px 12px; }
+QPushButton:hover { background: #4d3b60; }
+QPushButton:disabled { background: #241a2e; color: #7a6c88; }
 QWidget#feed, QWidget#qt_scrollarea_viewport { background: transparent; }
 QPushButton#stop { background: #b91c1c; font-weight: 700; }
 QPushButton#apply { background: #15803d; font-weight: 700; }
 QPushButton#reject { background: #7f1d1d; }
-QFrame#card { background: #18181b; border: 1px solid #d97706; border-radius: 8px; }
+QFrame#card { background: #1a1222; border: 1px solid #ffae42; border-radius: 8px; }
 QScrollArea { border: none; background: transparent; }
+QToolTip { color: #ece6f2; background: #1a1222; border: 1px solid #3a2c48; }
 """
 
 
@@ -95,6 +114,7 @@ class QtSink(QObject):
     sig_approval = Signal(object)
     sig_approval_closed = Signal(str, str)
     sig_modes = Signal(str, bool)
+    sig_level = Signal(float)  # microphone level 0..1 while listening (app.py, not the core)
 
     def status(self, state: str, text: str) -> None:
         self.sig_status.emit(state, text)
@@ -170,22 +190,37 @@ class CodeBlock(QFrame):
 
 
 class Overlay(QWidget):
-    def __init__(self, orch: "Orchestrator", sink: QtSink, home: Path) -> None:
+    def __init__(self, orch: "Orchestrator", sink: QtSink, home: Path, name: str = "Hellbot",
+                 hide_after_s: float = 12.0) -> None:
         super().__init__(None, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
         self.orch = orch
         self.home = home
         self.setObjectName("overlay")
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)  # rounded smoke card, painted below
         self.setStyleSheet(STYLE)
-        self.setMinimumWidth(460)
-        self.resize(480, 560)
+        self.setMinimumWidth(420)
+        self.resize(440, SHORT)
         self._drag: QPoint | None = None
         self._cards: dict[str, QFrame] = {}
+        self._anchor: QWidget | None = None
+        self._moved_by_hand = False
+        self._state = "idle"
+        self._glow = QColor(STATE_COLORS["idle"])
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(int(hide_after_s * 1000))
+        self._hide_timer.timeout.connect(self._auto_hide)
+        self._hide_after_s = hide_after_s
+        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade.setDuration(260)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 10, 12, 12)
+        root.setContentsMargins(14, 12, 14, 14)
 
         top = QHBoxLayout()
+        name_label = QLabel(name.upper())
+        name_label.setObjectName("name")
+        top.addWidget(name_label)
         self.dot = QLabel("●")
         self.state_label = QLabel("Starting…")
         self.state_label.setFont(QFont(self.state_label.font().family(), 10, QFont.Bold))
@@ -241,24 +276,49 @@ class Overlay(QWidget):
         root.addLayout(bottom)
 
         sink.sig_status.connect(self.on_status)
-        sink.sig_transcript.connect(lambda t: self.transcript_label.setText(f"You: {t}"))
+        sink.sig_transcript.connect(self.on_transcript)
         sink.sig_assistant.connect(self.on_assistant)
         sink.sig_activity.connect(self.activity_view.appendPlainText)
-        sink.sig_code.connect(lambda title, code, _lang: self._add(CodeBlock(code, title)))
+        sink.sig_code.connect(lambda title, code, _lang: (self._add(CodeBlock(code, title)), self.reveal()))
         sink.sig_approval.connect(self.on_approval)
         sink.sig_approval_closed.connect(self.on_approval_closed)
         sink.sig_modes.connect(self.on_modes)
 
-        self._place_bottom_right()
+        self._place()
+
+    def paintEvent(self, _event) -> None:  # type: ignore[no-untyped-def]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        fill = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        fill.setColorAt(0, QColor(58, 44, 72, 244))
+        fill.setColorAt(1, QColor(23, 15, 32, 248))
+        p.setBrush(fill)
+        edge = QColor(self._glow)
+        edge.setAlpha(150)
+        p.setPen(QPen(edge, 1.4))
+        p.drawRoundedRect(rect, 16, 16)
+        p.end()
 
     # -- slots -------------------------------------------------------------
 
     def on_status(self, state: str, text: str) -> None:
-        color = STATE_COLORS.get(state, "#6b7280")
+        color = STATE_COLORS.get(state, STATE_COLORS["idle"])
+        self._state = state
+        self._glow = QColor(color)
         self.dot.setStyleSheet(f"color:{color}; font-size:14pt;")
         self.state_label.setText(text)
-        if state in ("listening", "waiting") and not self.isVisible():
-            self.show()
+        self.update()
+        if state in ("waiting", "error"):
+            self.reveal()
+        if state == "idle":
+            self._arm_hide()
+        else:
+            self._hide_timer.stop()
+
+    def on_transcript(self, text: str) -> None:
+        self.transcript_label.setText(f"You: {text}")
+        self.reveal()
 
     def on_assistant(self, text: str) -> None:
         for seg in split_code_blocks(text):
@@ -272,6 +332,7 @@ class Overlay(QWidget):
                 label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
                 label.setOpenExternalLinks(True)
                 self._add(label)
+        self.reveal()
 
     def on_approval(self, req: ApprovalRequest) -> None:
         card = QFrame()
@@ -296,8 +357,8 @@ class Overlay(QWidget):
         lay.addLayout(row)
         self._cards[req.id] = card
         self._add(card)
-        self.show()
-        self.raise_()
+        self._resize_to(TALL)  # a diff needs room
+        self.reveal()
 
     def on_approval_closed(self, req_id: str, outcome: str) -> None:
         card = self._cards.pop(req_id, None)
@@ -308,6 +369,7 @@ class Overlay(QWidget):
                 btn.setEnabled(False)
         card.setStyleSheet("QFrame#card { border-color: %s; }" % ("#15803d" if outcome == "approved" else "#52525b"))
         card.layout().addWidget(QLabel(outcome.capitalize()))
+        self._arm_hide()
 
     def on_modes(self, edit_mode: str, remote: bool) -> None:
         names = {"suggest": "SUGGEST ONLY", "review": "REVIEW EDITS", "auto": "AUTO-APPLY"}
@@ -333,12 +395,78 @@ class Overlay(QWidget):
             self.input.clear()
             self.orch.submit_text_threadsafe(text, source="typed")
 
-    def _place_bottom_right(self) -> None:
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.right() - self.width() - 16, screen.bottom() - self.height() - 16)
+    # -- showing, hiding and following the orb ----------------------------------
+
+    def follow(self, orb: QWidget) -> None:
+        """Open next to the orb, and move with it when it is dragged."""
+        self._anchor = orb
+        self._place()
+
+    def orb_moved(self) -> None:
+        self._moved_by_hand = False
+        self._place()
+
+    def _place(self) -> None:
+        if self._moved_by_hand:
+            return
+        if self._anchor is None:
+            screen = QApplication.primaryScreen().availableGeometry()
+            self.move(screen.right() - self.width() - 16, screen.bottom() - self.height() - 16)
+            return
+        orb = self._anchor.frameGeometry()
+        screen = (QApplication.screenAt(orb.center()) or QApplication.primaryScreen()).availableGeometry()
+        overlap = 34  # the orb window has an empty margin around the smoke
+        x = orb.left() - self.width() + overlap
+        if x < screen.left() + 8:  # orb is on the left side: open to its right instead
+            x = orb.right() - overlap
+        y = orb.bottom() - self.height() - 12
+        x = max(screen.left() + 8, min(x, screen.right() - self.width() - 8))
+        y = max(screen.top() + 8, min(y, screen.bottom() - self.height() - 8))
+        self.move(x, y)
+
+    def reveal(self) -> None:
+        """Fade in without taking keyboard focus away from what you are doing."""
+        self._hide_timer.stop()
+        if not self.isVisible():
+            self._place()
+            self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            self.setWindowOpacity(0.0)
+            self.show()
+            self._fade.stop()
+            self._fade.setStartValue(0.0)
+            self._fade.setEndValue(1.0)
+            self._fade.start()
+        self.raise_()
+        if self._state == "idle":
+            self._arm_hide()
+
+    def _arm_hide(self) -> None:
+        if self._hide_after_s > 0 and self.isVisible():
+            self._hide_timer.start()
+
+    def _auto_hide(self) -> None:
+        busy = (self._state != "idle" or self._cards or self.input.hasFocus() or self.input.text()
+                or self.geometry().contains(QCursor.pos()))
+        if busy:  # you are reading, typing or deciding: check again later
+            self._arm_hide()
+        else:
+            self.hide()
+            self._resize_to(SHORT)
+
+    def _resize_to(self, height: int) -> None:
+        if self.height() != height and not self._moved_by_hand:
+            self.resize(self.width(), height)
+            self._place()
 
     def toggle(self) -> None:
-        self.setVisible(not self.isVisible())
+        if self.isVisible():
+            self._hide_timer.stop()
+            self.hide()
+        else:
+            self.reveal()
+            self.setAttribute(Qt.WA_ShowWithoutActivating, False)
+            self.activateWindow()  # opened on purpose: ready to type
+            self.input.setFocus()
 
     def mousePressEvent(self, e):  # type: ignore[no-untyped-def]  # drag the frameless window
         if e.button() == Qt.LeftButton:
@@ -346,6 +474,7 @@ class Overlay(QWidget):
 
     def mouseMoveEvent(self, e):  # type: ignore[no-untyped-def]
         if self._drag is not None and e.buttons() & Qt.LeftButton:
+            self._moved_by_hand = True  # stays where you put it until the orb is moved
             self.move(e.globalPosition().toPoint() - self._drag)
 
     def mouseReleaseEvent(self, _e):  # type: ignore[no-untyped-def]
@@ -353,11 +482,15 @@ class Overlay(QWidget):
 
 
 class Tray(QSystemTrayIcon):
-    def __init__(self, orch: "Orchestrator", overlay: Overlay, sink: QtSink, home: Path, on_quit) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, orch: "Orchestrator", overlay: Overlay, sink: QtSink, home: Path, on_quit,  # type: ignore[no-untyped-def]
+                 name: str = "Hellbot", on_talk=None) -> None:  # type: ignore[no-untyped-def]
         super().__init__(_dot_icon(STATE_COLORS["idle"]))
-        self.setToolTip("PC co-worker")
+        self.setToolTip(name)
         menu = QMenu()
-        menu.addAction("Show / hide overlay", overlay.toggle)
+        if on_talk is not None:
+            menu.addAction("Talk / finish talking", on_talk)
+        menu.addAction("Show / hide chat (type instead)", overlay.toggle)
+        menu.addAction("Stop everything", orch.stop_threadsafe)
         menu.addSeparator()
         group = QActionGroup(menu)
         self._mode_actions: dict[str, QAction] = {}
@@ -379,9 +512,13 @@ class Tray(QSystemTrayIcon):
         menu.addAction("Quit", on_quit)
         self.setContextMenu(menu)
         self.activated.connect(lambda reason: overlay.toggle() if reason == QSystemTrayIcon.Trigger else None)
-        sink.sig_status.connect(lambda state, _t: self.setIcon(_dot_icon(STATE_COLORS.get(state, "#6b7280"))))
+        sink.sig_status.connect(lambda state, _t: self.setIcon(_dot_icon(STATE_COLORS.get(state, STATE_COLORS["idle"]))))
         sink.sig_modes.connect(self._on_modes)
         self._menu = menu  # keep a reference; Qt does not own it
+
+    def popup(self, pos: QPoint) -> None:
+        """The same menu, for a right-click on the orb."""
+        self._menu.popup(pos)
 
     def _on_modes(self, edit_mode: str, remote: bool) -> None:
         if edit_mode in self._mode_actions:

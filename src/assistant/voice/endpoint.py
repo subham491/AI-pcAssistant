@@ -6,8 +6,13 @@ deterministic, unit-tested. faster-whisper's built-in Silero VAD then trims
 any leftover silence/noise inside the captured audio before transcription,
 so this only needs to be good at *where to stop*, not at perfect labelling.
 
-Swap-in point: replace `Endpointer` with a streaming Silero VAD if you find
-it cutting you off in a noisy room (see README "Customising").
+Two things keep it from cutting you off mid-sentence: once you are speaking,
+a quieter level still counts as speech (`keep_ratio`, so trailing-off words are
+not read as silence), and `stop_on_silence=False` makes it wait for `finish()`
+(click-to-stop) instead of any pause.
+
+Swap-in point: replace `Endpointer` with a streaming Silero VAD if a noisy
+room still confuses it (see README "Customising").
 """
 
 from __future__ import annotations
@@ -46,6 +51,8 @@ class EndpointerConfig:
     ratio: float = 3.0  # speech must be this many times the noise floor
     abs_min_rms: float = 300.0  # int16 units; below this is never speech
     min_speech_s: float = 0.25  # ignore clicks/bumps shorter than this
+    keep_ratio: float = 1.6  # once speaking, this many times the noise floor still counts as speech
+    stop_on_silence: bool = True  # False: only finish() or max_utterance_s ends the capture
 
 
 class Endpointer:
@@ -66,16 +73,31 @@ class Endpointer:
         self._elapsed = 0.0
         self._speech_s = 0.0
         self._silence_s = 0.0
+        self.level = 0.0  # RMS of the last frame, for the on-screen voice meter
         self._preroll.clear()
 
     def is_speech(self, level: float) -> bool:
         return level > max(self.noise * self.cfg.ratio, self.cfg.abs_min_rms)
 
+    def still_speech(self, level: float) -> bool:
+        """Lower bar used mid-utterance: soft word endings and quiet speakers stay 'speech'."""
+        scale = self.cfg.keep_ratio / self.cfg.ratio
+        return level > max(self.noise * self.cfg.keep_ratio, self.cfg.abs_min_rms * scale)
+
+    def finish(self) -> EndState:
+        """The user said "done" (second click / hotkey). Whatever was captured is the utterance."""
+        if self.state is EndState.SPEAKING:
+            self.state = EndState.DONE
+        elif self.state is EndState.WAITING:
+            self.state = EndState.NO_SPEECH
+        return self.state
+
     def feed(self, frame: np.ndarray) -> EndState:
         if self.state in (EndState.DONE, EndState.NO_SPEECH, EndState.TOO_LONG):
             return self.state
         level = rms(frame)
-        speech = self.is_speech(level)
+        self.level = level
+        speech = self.still_speech(level) if self.state is EndState.SPEAKING else self.is_speech(level)
         self._elapsed += self._frame_s
 
         if self.state is EndState.WAITING:
@@ -100,7 +122,7 @@ class Endpointer:
             self._silence_s = 0.0
         else:
             self._silence_s += self._frame_s
-            if self._silence_s >= self.cfg.end_silence_s:
+            if self.cfg.stop_on_silence and self._silence_s >= self.cfg.end_silence_s:
                 self.state = EndState.DONE
         if self.state is EndState.SPEAKING and len(self._frames) * self._frame_s >= self.cfg.max_utterance_s:
             self.state = EndState.TOO_LONG
