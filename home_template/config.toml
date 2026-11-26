@@ -1,0 +1,41 @@
+# PC co-worker settings. Only change what you need; everything has a default
+# (see src/assistant/config.py for the full list). Restart the app after editing.
+
+[brain]
+# "subscription" = your Claude Pro/Max login (run `pc-assistant login` once).
+# "api_key"      = uses the ANTHROPIC_API_KEY environment variable instead.
+auth_mode = "subscription"
+# model = "opus"            # leave unset for Claude Code's default
+# resume_last_session = true
+
+[voice]
+# wake_word_enabled = true
+# wake_word_model = "hey_jarvis"   # pre-trained openWakeWord model, or a path to your .onnx
+# wake_word_threshold = 0.5        # raise if it wakes by mistake, lower if it misses you
+# stt_model = "small.en"           # tiny.en / base.en (faster), medium.en (better), "small" for other languages
+# language = "en"
+# Words Whisper should expect: project names, jargon. Biggest accuracy win.
+vocabulary = ["Claude", "Jira", "Teams", "GitHub", "VS Code"]
+# end_silence_s = 0.7              # longer if it cuts you off mid-thought
+# tts_enabled = true
+# tts_voice = "Zira"               # part of a Windows voice name
+
+[hotkeys]
+# pynput syntax, e.g. "<ctrl>+<alt>+<space>"
+# talk = "<ctrl>+<alt>+<space>"
+# stop = "<ctrl>+<alt>+q"
+# toggle_overlay = "<ctrl>+<alt>+o"
+
+[capture]
+# main_monitor = 0                 # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
+# save_screenshots = false
+# redact_processes = ["KeePassXC.exe", "1Password.exe", "Bitwarden.exe"]
+
+[safety]
+# edit_mode = "review"             # "suggest" | "review" | "auto"
+# bash_allow_prefixes = ["git status", "git diff", "git log", "ls", "dir"]
+
+[remote]
+# Where the project lives on your sister's laptop (for "pull her project").
+remote_project_path = 'C:\Users\sister\Projects\project'
+project_name = "sister-project"

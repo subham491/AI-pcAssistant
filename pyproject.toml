@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pc-assistant"
+version = "0.1.0"
+description = "Voice-controlled Windows co-worker: local wake word + speech-to-text, Claude Code (Agent SDK) as the brain."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  # Pinned on purpose: the Agent SDK and its bundled Claude Code change often.
+  # Upgrade deliberately (see README "Upgrading").
+  "claude-agent-sdk==0.2.189",
+  "numpy>=1.26",
+  "pillow>=10.3",
+]
+
+[project.optional-dependencies]
+# Everything the real app needs on Windows. Kept optional so the pure-logic
+# test suite runs anywhere (CI on Linux + Windows) without audio/GUI stacks.
+app = [
+  "faster-whisper>=1.1",
+  "openwakeword>=0.6",
+  "sounddevice>=0.4.7",
+  "pyttsx3>=2.98",
+  "mss>=9.0",
+  "pynput>=1.7.7",
+  "psutil>=5.9",
+  "PySide6>=6.7",
+  "pywin32>=306; sys_platform == 'win32'",
+  "uiautomation>=2.0.20; sys_platform == 'win32'",
+]
+dev = ["pytest>=8"]
+
+[project.scripts]
+pc-assistant = "assistant.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
