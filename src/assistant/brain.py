@@ -67,6 +67,16 @@ VOICE_PROMPT = """
 - The user's notes about themselves live in memory/about-me.md and knowledge/ in the home folder.
 """.strip()
 
+
+def name_line(name: str) -> str:
+    """The assistant's name, as the user chose it in [ui].name."""
+    name = name.strip()
+    if not name:
+        return ""
+    return (f"Your name is {name}. That is what the user calls you; answer to it, and say it if asked who "
+            f"you are (you run on Claude, by Anthropic).\n\n")
+
+
 REMOTE_PROMPT = """
 # REMOTE MODE
 The screenshots show a REMOTE laptop (the user's sister's personal laptop) through Remote Desktop.
@@ -180,7 +190,7 @@ class Brain:
     # -- options ---------------------------------------------------------
 
     def _options(self, resume: str | None) -> ClaudeAgentOptions:
-        append = VOICE_PROMPT + ("\n\n" + REMOTE_PROMPT if self.profile == "remote" else "")
+        append = name_line(self.cfg.ui.name) + VOICE_PROMPT + ("\n\n" + REMOTE_PROMPT if self.profile == "remote" else "")
         opts = ClaudeAgentOptions(
             cwd=str(self.cfg.home),
             setting_sources=list(self.cfg.brain.setting_sources),  # type: ignore[arg-type]

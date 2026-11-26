@@ -7,7 +7,9 @@ import os
 import site
 import sys
 import threading
+import time
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -51,9 +53,32 @@ def pick_device(requested: str, compute_type: str) -> tuple[str, str]:
     return device, compute_type
 
 
+DEFAULT_MODEL = "large-v3-turbo"
+SLOW_FACTOR = 2.0  # transcription taking longer than this many times the audio length is "slow"
+
+
+def resolve_model(name: str) -> str:
+    """"auto" -> large-v3-turbo. The small models are the main cause of misheard words with
+    non-American accents; turbo keeps large-v3's encoder (where accents are handled) with a
+    4-layer decoder, so it stays quick. Anything else is passed to faster-whisper unchanged:
+    a size name, a Hugging Face repo id of a CTranslate2 model, or a local folder."""
+    return DEFAULT_MODEL if name.strip().lower() in ("", "auto") else name
+
+
+def build_prompt(name: str, vocabulary: list[str]) -> str | None:
+    """Words Whisper should expect, as a short glossary. The assistant's own name goes first
+    so "Hellbot" is not heard as "hell bought"."""
+    words = list(dict.fromkeys(w.strip() for w in [name, *vocabulary] if w and w.strip()))
+    return ("Glossary: " + ", ".join(words) + ".") if words else None
+
+
 class SpeechToText:
-    def __init__(self, cfg: VoiceConfig) -> None:
+    def __init__(self, cfg: VoiceConfig, name: str = "", on_slow: Callable[[str], None] | None = None) -> None:
         self.cfg = cfg
+        self.model_name = resolve_model(cfg.stt_model)
+        self.prompt = build_prompt(name, cfg.vocabulary)
+        self._on_slow = on_slow
+        self._warned_slow = False
         self._model = None
         self._lock = threading.Lock()  # faster-whisper models are not re-entrant
         self.device = ""
@@ -64,19 +89,19 @@ class SpeechToText:
         add_nvidia_dll_dirs()
         device, compute = pick_device(self.cfg.stt_device, self.cfg.stt_compute_type)
         try:
-            self._model = WhisperModel(self.cfg.stt_model, device=device, compute_type=compute)
+            self._model = WhisperModel(self.model_name, device=device, compute_type=compute)
             self.device = device
         except Exception:
             if device == "cpu":
                 raise
             log.warning("could not load Whisper on %s; falling back to CPU", device, exc_info=True)
             self._load_cpu()
-        log.info("speech-to-text: %s on %s", self.cfg.stt_model, self.device)
+        log.info("speech-to-text: %s on %s", self.model_name, self.device)
 
     def _load_cpu(self) -> None:
         from faster_whisper import WhisperModel
 
-        self._model = WhisperModel(self.cfg.stt_model, device="cpu", compute_type="int8")
+        self._model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
         self.device = "cpu"
 
     def transcribe(self, audio: np.ndarray) -> str:
@@ -97,14 +122,22 @@ class SpeechToText:
 
     def _run(self, audio: np.ndarray) -> str:
         assert self._model is not None
-        # The wake phrase is a made-up word; without the hint Whisper writes "helmet" or "Helbert".
-        prompt = ", ".join(filter(None, [*self.cfg.vocabulary, self.cfg.wake_phrase])) or None
+        beam = self.cfg.stt_beam_size or (5 if self.device == "cuda" else 1)
+        started = time.monotonic()
         segments, _info = self._model.transcribe(
             audio,
             language=self.cfg.language,
-            initial_prompt=prompt,
+            initial_prompt=self.prompt,
             vad_filter=True,
-            beam_size=5,
+            beam_size=beam,
             condition_on_previous_text=False,
         )
-        return " ".join(s.text.strip() for s in segments).strip()
+        text = " ".join(s.text.strip() for s in segments).strip()  # segments is lazy: work happens here
+        took, length = time.monotonic() - started, audio.size / 16_000
+        log.info("transcribed %.1fs of audio in %.1fs (%s, %s)", length, took, self.model_name, self.device)
+        if took > max(3.0, SLOW_FACTOR * length) and not self._warned_slow and self._on_slow:
+            self._warned_slow = True
+            self._on_slow(
+                f"Speech recognition took {took:.0f}s for {length:.0f}s of speech on this PC's {self.device.upper()}. "
+                f'For speed over accuracy set stt_model = "small.en" under [voice] in config.toml.')
+        return text

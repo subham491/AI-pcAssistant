@@ -1,6 +1,6 @@
 # QA notes and Windows test plan
 
-The automated suite (`python -m pytest -q`, 117 tests, Linux + Windows CI) covers the pure
+The automated suite (`python -m pytest -q`, Linux + Windows CI) covers the pure
 logic. Everything below needs a real Windows desktop, a mic and your Claude login. Run it once
 after setup and after every SDK upgrade. Each step says what you should see; anything else is
 a bug worth noting with `logs\assistant.log` and `logs\audit.jsonl`.
@@ -14,25 +14,32 @@ a bug worth noting with `logs\assistant.log` and `logs\audit.jsonl`.
 | 0.3 | Close and re-run `text`, ask `what did I just say?` | It remembers (session resumed) |
 | 0.4 | Set `auth_mode = "api_key"` with no key set, run `text` | Clear "ANTHROPIC_API_KEY is not set" message, no crash. Set it back |
 
-## 1. Voice
+## 1. Voice and the orb
 
 | # | Do | Expect |
 |---|---|---|
-| 1.1 | Start the app, say "Hey Jarvis", pause, "what time is it" | Beep, status "Listening", second beep, transcript in overlay, spoken answer |
-| 1.2 | Ctrl+Alt+Space, speak | Same without wake word |
-| 1.3 | Ctrl+Alt+Space while it is talking | Speech stops immediately, it listens |
-| 1.4 | Wake it and say nothing for 5 s | Returns to Ready, no turn sent |
-| 1.5 | Join a Teams/Zoom test call, say "Hey Jarvis" | No wake (mic in use by call app). Hotkey still works |
-| 1.6 | Let it read a long answer; check it does not wake itself | No self-trigger from its own voice |
-| 1.7 | Ask for code ("write a python hello world") | Code appears with Copy button; it says "I've put the code on screen" instead of reading code |
-| 1.8 | Speak a project-specific word that Whisper gets wrong, add it to `vocabulary`, restart, repeat | Recognised correctly |
+| 1.1 | Start the app and say something without clicking | Orb stays asleep (eyes closed, slow wisps). Nothing is transcribed; `assistant.log` has no "transcribed" line |
+| 1.2 | Click the orb (or Ctrl+Alt+Space), say "what time is it", stop talking | Beep, eyes open, orb glows red and swells with your voice. ~2 s after you stop: second beep, amber "thinking" smoke, the card opens beside the orb with your words, spoken answer |
+| 1.3 | Click, say half a sentence, pause for 1.5 s, finish it | The whole sentence is transcribed (this is the "stops listening midway" bug) |
+| 1.4 | Click, speak, click again straight away | Stops listening at once, no 2 s wait |
+| 1.5 | Set `stop_on_silence = false`, restart, click, speak, wait 6 s, click | Still listening during the wait; ends only on the second click |
+| 1.6 | Click and say nothing for 8 s | Goes back to sleep, no turn sent |
+| 1.7 | Click the orb while it is talking | Speech stops immediately, it listens |
+| 1.8 | Read 5 sentences you would really say (names, jargon, numbers) | Transcript matches. Note any misheard words; add recurring ones to `vocabulary` |
+| 1.9 | First run after this update | Activity log: "Loading speech model large-v3-turbo…" then "Speech model ready on CUDA" (or CPU). On CPU, a one-time note if transcription is slow |
+| 1.10 | Click on the desktop just outside the smoke; drag the orb; restart | Click reaches the desktop. Orb moves, the card follows, and it reopens where you left it |
+| 1.11 | Right-click the orb; press Ctrl+Alt+O | Menu (talk, chat, stop, modes, quit). Card opens with the typing box focused |
+| 1.12 | Leave an answer on screen for 15 s without touching it | Card folds away; it stays while the mouse is over it or an approval is waiting |
+| 1.13 | Ask for code ("write a python hello world") | Code appears with Copy button; it says "I've put the code on screen" instead of reading code |
+| 1.14 | Optional: `wake_word_enabled = true` + `wake_phrase = "hellbot"`, restart, say "Hellbot, what time is it" | Works without a click. On a Teams/Zoom call it does not wake |
+| 1.15 | Ctrl+Alt+Q while listening | Listening stops, nothing is sent |
 
 ## 2. Screen
 
 | # | Do | Expect |
 |---|---|---|
 | 2.1 | Focus VS Code, say "look at this, what file is open?" | Correct file. Activity shows "Captured: focused window: Code.exe" |
-| 2.2 | Click the overlay, then ask 2.1 again | Still captures VS Code, not the overlay |
+| 2.2 | Click the orb to ask 2.1 | Still captures VS Code, not the orb or the card |
 | 2.3 | "what's on the left screen" / "right screen" / "both screens" | Correct monitor(s), by physical position |
 | 2.4 | Set display scaling to 150% on one monitor, repeat 2.3 | Images are not cropped or offset |
 | 2.5 | Open KeePassXC/1Password next to VS Code, ask "this screen" | Password manager area is black with "[hidden: ...]" |

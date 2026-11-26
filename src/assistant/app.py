@@ -58,6 +58,7 @@ def run_gui(cfg: Config) -> int:
     from PySide6.QtCore import QObject, Signal
     from PySide6.QtWidgets import QApplication
 
+    from .ui.orb import Orb
     from .ui.overlay import Overlay, QtSink, Tray
     from .voice.tts import Speaker
 
@@ -72,22 +73,45 @@ def run_gui(cfg: Config) -> int:
 
     # Build the UI before the core starts: the core's first status and mode updates are
     # signals, and a signal sent before anything is connected is lost ("Starting…" forever).
-    overlay = Overlay(orch, sink, cfg.home)
-    tray = Tray(orch, overlay, sink, cfg.home, lambda: quit_app())
-    core.start()
+    name = cfg.ui.name
+    listener = None
+
+    def talk() -> None:
+        """Orb click, tray menu or talk hotkey: start listening, or finish if already listening."""
+        speaker.stop()  # barge-in: talking cuts off the current reply
+        if listener is not None:
+            listener.trigger()
+        else:
+            sink.activity("No microphone: type in the chat instead.")
+            bridge.toggle.emit()
+
+    def stop_all() -> None:
+        if listener is not None:
+            listener.cancel()
+        orch.stop_threadsafe()
 
     class Bridge(QObject):
         toggle = Signal()
 
     bridge = Bridge()
+    overlay = Overlay(orch, sink, cfg.home, name=name, hide_after_s=cfg.ui.answer_hide_s)
+    tray = Tray(orch, overlay, sink, cfg.home, lambda: quit_app(), name=name, on_talk=talk)
+    orb = Orb(name, _pretty_hotkey(cfg.hotkeys.talk), cfg.state_dir / "orb.json")
+    orb.place(cfg.ui.corner, cfg.ui.monitor)
+    overlay.follow(orb)
+    orb.clicked.connect(talk)
+    orb.menu_requested.connect(tray.popup)
+    orb.moved.connect(overlay.orb_moved)
+    sink.sig_status.connect(orb.set_status)
+    sink.sig_level.connect(orb.set_level)
     bridge.toggle.connect(overlay.toggle)
+    core.start()
 
-    listener = None
     stt_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt")
     if cfg.voice.enabled:
         listener = _start_voice(cfg, orch, sink, speaker, stt_pool)
 
-    hotkeys = _start_hotkeys(cfg, orch, speaker, listener, bridge.toggle.emit)
+    hotkeys = _start_hotkeys(cfg, talk, stop_all, bridge.toggle.emit)
 
     def quit_app() -> None:
         if hotkeys is not None:
@@ -100,15 +124,21 @@ def run_gui(cfg: Config) -> int:
         app.quit()
 
     tray.show()
-    overlay.show()
-    tray.showMessage("PC co-worker", _hint(cfg), msecs=6000)
+    orb.show()
+    tray.showMessage(name, _hint(cfg), msecs=6000)
     return app.exec()
+
+
+def _pretty_hotkey(combo: str) -> str:
+    """"<ctrl>+<alt>+<space>" -> "Ctrl+Alt+Space"."""
+    return "+".join(part.strip("<>").capitalize() for part in combo.split("+"))
 
 
 def _hint(cfg: Config) -> str:
     word = cfg.voice.wake_phrase or cfg.voice.wake_word_model.replace("_", " ")
-    wake = f"say “{word}” or " if cfg.voice.enabled and cfg.voice.wake_word_enabled else ""
-    return f"Ready. {wake}press {cfg.hotkeys.talk} to talk; {cfg.hotkeys.stop} stops everything."
+    wake = f", or say “{word}”" if cfg.voice.enabled and cfg.voice.wake_word_enabled else ""
+    return (f"Asleep, mic off. Click the orb or press {_pretty_hotkey(cfg.hotkeys.talk)} to talk{wake}; "
+            f"click again when you are done. {_pretty_hotkey(cfg.hotkeys.stop)} stops everything.")
 
 
 def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoolExecutor):  # type: ignore[no-untyped-def]
@@ -116,8 +146,18 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
     from .voice.listener import CallDetector, Listener, beep
     from .voice.stt import SpeechToText
 
-    stt = SpeechToText(cfg.voice)
-    pool.submit(stt.load)  # warm the model in the background (first run downloads it)
+    stt = SpeechToText(cfg.voice, name=cfg.ui.name, on_slow=sink.activity)
+
+    def warm() -> None:  # first run downloads the model; say so instead of looking stuck
+        sink.activity(f"Loading speech model {stt.model_name} (first run downloads it, about 1.6 GB)…")
+        try:
+            stt.load()
+            sink.activity(f"Speech model ready on {stt.device.upper()}.")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("speech model failed to load")
+            sink.status("error", f"Speech model failed to load: {exc}")
+
+    pool.submit(warm)
 
     def transcribe_and_submit(audio: np.ndarray, needs_wake: bool) -> None:
         try:
@@ -140,13 +180,15 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
         else:
             sink.status("idle", "Didn't catch that")
 
-    states = {"listening": "Listening…", "transcribing": "Transcribing…", "idle": "Ready"}
+    listening = "Listening…" if cfg.voice.stop_on_silence else "Listening… click again when you are done"
+    states = {"listening": listening, "transcribing": "Transcribing…", "idle": "Asleep (mic off)"}
     listener = Listener(
         cfg.voice,
         on_utterance=lambda audio, needs_wake: pool.submit(transcribe_and_submit, audio, needs_wake),
         on_state=lambda s: sink.status(s, states.get(s, s)),
         is_speaking=lambda: speaker.speaking,
         wake_muted=CallDetector(cfg.voice.mute_wake_when_mic_used_by),
+        on_level=sink.sig_level.emit,
     )
     try:
         listener.start()
@@ -157,19 +199,14 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
     return listener
 
 
-def _start_hotkeys(cfg: Config, orch: Orchestrator, speaker, listener, toggle_overlay):  # type: ignore[no-untyped-def]
+def _start_hotkeys(cfg: Config, talk, stop_all, toggle_overlay):  # type: ignore[no-untyped-def]
     try:
         from pynput import keyboard
     except ImportError:
         return None
 
-    def talk() -> None:
-        speaker.stop()  # barge-in: talking cuts off the current reply
-        if listener is not None:
-            listener.trigger()
-
     try:
-        hk = keyboard.GlobalHotKeys({cfg.hotkeys.talk: talk, cfg.hotkeys.stop: orch.stop_threadsafe,
+        hk = keyboard.GlobalHotKeys({cfg.hotkeys.talk: talk, cfg.hotkeys.stop: stop_all,
                                      cfg.hotkeys.toggle_overlay: toggle_overlay})
         hk.start()
         return hk

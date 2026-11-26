@@ -104,7 +104,7 @@ if (-not $CpuOnly -and (Have "nvidia-smi")) {
     Warn "Installing CUDA libraries for faster-whisper (about 1 GB)..."
     Invoke-Checked $Py @("-m", "pip", "install", "--quiet", "nvidia-cublas-cu12", "nvidia-cudnn-cu12==9.*")
 } else {
-    Ok "No NVIDIA GPU (or -CpuOnly): speech-to-text runs on the CPU. Consider stt_model = ""base.en"" if it feels slow."
+    Ok "No NVIDIA GPU (or -CpuOnly): speech-to-text runs on the CPU. Set stt_model = ""small.en"" if it feels slow."
 }
 
 # ---------------------------------------------------------------- 4. home folder
@@ -121,7 +121,8 @@ if ($AssistantHome -ne $defaultHome) {
 if (-not $SkipModels) {
     Step "Downloading models (one time)"
     Invoke-Checked $Py @("-c", "import openwakeword.utils as u; u.download_models(['hey_jarvis']); print('    wake word model ready')")
-    Invoke-Checked $Py @("-c", "from faster_whisper import WhisperModel; WhisperModel('small.en', device='cpu', compute_type='int8'); print('    speech model ready')")
+    Warn "Downloading the speech model (about 1.6 GB, one time)..."
+    Invoke-Checked $Py @("-c", "from faster_whisper.utils import download_model; from assistant.config import load_config; from assistant.voice.stt import resolve_model; m = resolve_model(load_config().voice.stt_model); download_model(m); print('    speech model ready: ' + m)")
 }
 
 # ---------------------------------------------------------------- 6. shortcuts

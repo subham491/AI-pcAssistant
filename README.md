@@ -7,7 +7,7 @@ connectors, CLAUDE.md) works here too. It looks at your screen when you ask, edi
 files with your approval, and asks before doing anything consequential.
 
 ```
- mic ─► wake word ─► end-of-speech ─► Whisper (local) ─► transcript ─┐
+ mic ─► orb click ─► end-of-speech ─► Whisper (local) ─► transcript ─┐
                                                                       ▼
  overlay ◄── reply text + code + approval cards ◄── orchestrator ──► Claude Code (Agent SDK)
  speaker ◄── sentences (Windows voices)                 ▲   │           │ tools
@@ -73,14 +73,24 @@ any `ANTHROPIC_API_KEY` from Claude Code so you never get billed by accident.
 
 | Do this | What happens |
 |---|---|
-| Say **"Hey Jarvis"**, then speak | Beep, it listens until you pause (~0.7 s), beeps again, transcribes locally |
-| Press **Ctrl+Alt+Space**, then speak | Same, without the wake word. Also cuts off a reply that is being spoken |
-| Type in the overlay's box | Same as speaking |
-| Press **Ctrl+Alt+Q**, say "stop", or click **■ Stop** | Kill switch (see below) |
-| **Ctrl+Alt+O** or click the tray icon | Show / hide the overlay |
+Hellbot is the small smoke orb in the corner of your screen. **While its eyes are closed the
+microphone is off**: nothing is listened to or recorded until you wake it.
 
-The wake word pauses automatically while Teams, Zoom, Slack, etc. are using your microphone.
-It also ignores its own voice while it is speaking.
+| Do this | What happens |
+|---|---|
+| **Click the orb**, or press **Ctrl+Alt+Space**, then speak | Beep, eyes open, it glows with your voice. It waits through pauses of up to 2 s |
+| Click the orb / press the hotkey **again** | "I'm done": it stops listening at once and transcribes locally |
+| Just stop talking | After ~2 s of silence it finishes by itself (`stop_on_silence = false` turns this off, so only the second click ends it) |
+| Press **Ctrl+Alt+O**, or right-click the orb → *Show / hide chat* | Opens the answer card with a box to type instead of talking |
+| Press **Ctrl+Alt+Q**, say "stop", or click **■ Stop** | Kill switch (see below). Also stops listening |
+| Drag the orb | Moves it; it remembers where you put it |
+
+The answer card opens beside the orb when there is something to read (your words, the reply,
+code, an approval) and folds away ~12 s after the answer (`[ui] answer_hide_s`).
+
+Clicking the orb while it is talking cuts the reply off and listens. A wake word is optional
+and off by default: set `wake_word_enabled = true` (see "Make it yours"). When on, it pauses
+while Teams, Zoom, Slack, etc. are using your microphone and ignores its own voice.
 
 ### What it sees
 
@@ -198,7 +208,10 @@ Most improvements need **no Python at all**:
 | Jira, Drive, GitHub... | Add an MCP server/connector in Claude Code (`claude mcp add ...`) or at claude.ai |
 | Better recognition of your words | `[voice] vocabulary = [...]` in `config.toml` |
 | A different wake word | `wake_phrase = "hellbot"` (any phrase, no training: spotted with Whisper, say "Hellbot, what time is it" in one go or "Hellbot", beep, then speak). Or `wake_word_model` = another openWakeWord model or your own `.onnx` |
-| Faster/better speech-to-text | `stt_model` = `base.en` (faster) / `medium.en` (better) |
+| A wake word as well as the click | `wake_word_enabled = true`, plus the row above |
+| Faster speech-to-text | `stt_model = "small.en"` (about 6x lighter, noticeably worse with accents) |
+| A speech model tuned for your accent | `stt_model` = the Hugging Face repo id (or a local folder) of any Whisper model in CTranslate2 format |
+| A different name, corner or screen for the orb | `[ui] name`, `corner`, `monitor` |
 | More commands to run without asking | `[safety] bash_allow_prefixes` |
 | Block more things | `[safety] extra_forbidden_commands` / `extra_forbidden_paths` (regex / path) |
 
@@ -217,7 +230,7 @@ src/assistant/
   config.py         every setting and its default
   desktop/          capture.py (screenshots), tools.py (Claude's desktop tools), control.py (input, UIA), win32.py
   voice/            listener.py (mic + wake word), endpoint.py, stt.py (Whisper), tts.py (SAPI), speech_text.py
-  ui/               overlay.py (tray + overlay), sink.py (UI interface), markdown.py
+  ui/               orb.py (the smoke orb), overlay.py (tray + answer card), sink.py (UI interface), markdown.py
 ```
 
 Recipes:
@@ -251,10 +264,10 @@ The blueprint left these open. Each is a default in `config.toml` or a small cod
 | Question | Default chosen | Why / how to change |
 |---|---|---|
 | GPU | Auto: NVIDIA GPU if usable, else CPU | `stt_device`; setup adds CUDA libs when `nvidia-smi` exists |
-| Language | English (`small.en`) | `language = "hi"` / `stt_model = "small"` for other or mixed languages |
-| Wake word vs push-to-talk | Both on: "Hey Jarvis" (pre-trained) + Ctrl+Alt+Space | `wake_word_enabled = false` for hotkey only; custom wake word via your own model |
+| Speech model | Whisper `large-v3-turbo` (`stt_model = "auto"`), spoken English | The small models mishear accented English; turbo keeps the large model's hearing with a small decoder. `language = "hi"` etc. for other languages (turbo is multilingual) |
+| Wake word vs click to talk | Click the orb or Ctrl+Alt+Space; wake word off | `wake_word_enabled = true` adds "Hey Jarvis" or your own `wake_phrase` |
 | Voice out | Windows built-in voices (SAPI) | Local, zero setup, interruptible. Piper is a swap-in |
-| End-of-speech | Adaptive energy detector + Whisper's Silero VAD trim | Simple and deterministic; streaming Silero is a swap-in in `voice/endpoint.py` |
+| End-of-speech | Second click, or 2 s of silence. Adaptive energy detector + Whisper's Silero VAD trim | Simple and deterministic; streaming Silero is a swap-in in `voice/endpoint.py` |
 | Window capture | `mss` region grab of the focused window | Windows.Graphics.Capture is the upgrade (true per-window, no overlap) |
 | Remote mode trigger | Automatic when an RDP client is focused, plus voice override | `remote_desktop_processes` |
 | Undo | In-memory last 20 edits (restores exact bytes) | Lost on restart; git history is the backup |
@@ -271,7 +284,15 @@ UI Automation, tray and hotkeys needs your first run on Windows** (see docs/QA.m
 
 - Window screenshots grab the screen area of the window, so anything overlapping it is
   included. Windows.Graphics.Capture would fix this.
-- "Stop" by voice needs the wake word or hotkey first; the always-on hotkey is the reliable
+- Speech recognition: `large-v3-turbo` was chosen because larger Whisper models are the
+  usual fix for accented English, and public benchmarks put it within about half a point of
+  large-v3. No published Indian-English score was found for it, so judge it on your own voice;
+  `vocabulary` and an accent-specific model (`stt_model`) are the next steps if it still mishears.
+- First run downloads the speech model (about 1.6 GB). On a PC without an NVIDIA GPU it runs
+  on the CPU and can take several seconds per sentence; the activity log says so once.
+- The orb is drawn on the CPU (numpy) at 15 to 30 frames a second. Clicks pass through the
+  transparent area around it on Windows; if they do not on your setup, report it.
+- "Stop" by voice needs a click, the hotkey or the wake word first; the always-on hotkey is the reliable
   kill switch.
 - Unsaved VS Code buffers are not detected. Turn on VS Code *Auto Save* so disk is current.
 - Claude Code's own VS Code diff integration is not used (unconfirmed under the SDK).
@@ -289,9 +310,11 @@ UI Automation, tray and hotkeys needs your first run on Windows** (see docs/QA.m
 | Symptom | Fix |
 |---|---|
 | `doctor` says Auth WARN / "I couldn't reach Claude" | `python -m assistant login`, then `python -m assistant text` |
-| Wakes by mistake / misses you | `wake_word_threshold` up / down (0.3 to 0.7) |
-| Cuts you off mid-sentence | `end_silence_s = 1.0` |
-| Transcription slow | `stt_model = "base.en"`, or check `doctor` shows your GPU |
+| Wake word wakes by mistake / misses you | `wake_word_threshold` up / down (0.3 to 0.7) |
+| Cuts you off mid-sentence | `stop_on_silence = false` (only your second click ends it), or raise `end_silence_s` |
+| Keeps listening after you finish | Click the orb again, or lower `end_silence_s` (a noisy room reads as speech) |
+| Mishears your words | Add names and jargon to `vocabulary`; keep `stt_model = "auto"`; check `logs\assistant.log` for the model and device in use |
+| Transcription slow | Check `doctor` shows your GPU; otherwise `stt_model = "small.en"` |
 | `cublas64_12.dll not found` | Re-run `setup.ps1` (installs CUDA libs); it falls back to CPU meanwhile |
 | Clicks land in the wrong place | Report it with the monitor layout from `doctor`; DPI awareness is set per monitor |
 | Hotkey does nothing | Another app owns it; change `[hotkeys]` |

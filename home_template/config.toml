@@ -1,4 +1,4 @@
-# PC co-worker settings. Only change what you need; everything has a default
+# Hellbot settings. Only change what you need; everything has a default
 # (see src/assistant/config.py for the full list). Restart the app after editing.
 
 [brain]
@@ -8,16 +8,25 @@ auth_mode = "subscription"
 # model = "opus"            # leave unset for Claude Code's default
 # resume_last_session = true
 
+[ui]
+# name = "Hellbot"                 # shown on the orb's card and tray; what the assistant calls itself
+# corner = "bottom-right"          # bottom-right | bottom-left | top-right | top-left (or just drag the orb)
+# monitor = 0                      # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
+# answer_hide_s = 12               # the answer card folds away this long after the answer; 0 = never
+
 [voice]
-# wake_word_enabled = true
+# The mic is off until you click the orb or press the talk hotkey. Click again when you are done.
+# stop_on_silence = true           # false = it keeps listening until your second click, however long you pause
+# end_silence_s = 2.0              # the pause that ends what you are saying (when stop_on_silence is on)
+# wake_word_enabled = false        # true = also wake by voice, using one of the two options below
 # wake_word_model = "hey_jarvis"   # pre-trained openWakeWord model, or a path to your .onnx
 # wake_word_threshold = 0.5        # raise if it wakes by mistake, lower if it misses you
 # wake_phrase = "hellbot"          # any phrase, spotted with Whisper instead of the model above (no training)
-# stt_model = "small.en"           # tiny.en / base.en (faster), medium.en (better), "small" for other languages
+# stt_model = "auto"               # large-v3-turbo: best with accents. "small.en" is much lighter but mishears more.
+#                                  # Also accepts a Hugging Face repo id / folder of a CTranslate2 Whisper model.
 # language = "en"
 # Words Whisper should expect: project names, jargon. Biggest accuracy win.
 vocabulary = ["Claude", "Jira", "Teams", "GitHub", "VS Code"]
-# end_silence_s = 0.7              # longer if it cuts you off mid-thought
 # tts_enabled = true
 # tts_voice = "Zira"               # part of a Windows voice name
 

@@ -51,3 +51,31 @@ def test_max_length():
     ep = Endpointer(EndpointerConfig(max_utterance_s=1.0))
     states = [ep.feed(frame(3000)) for _ in range(20)]
     assert EndState.TOO_LONG in states
+
+
+def test_trailing_off_speech_is_not_read_as_silence():
+    # Words often fade to well under the "speech started" level. That used to count as silence
+    # and end the capture mid-sentence.
+    ep = Endpointer(EndpointerConfig(end_silence_s=0.4))
+    for _ in range(10):
+        ep.feed(frame(50))
+    for _ in range(6):
+        ep.feed(frame(3000))
+    for _ in range(12):  # ~1 s of soft speech: above the room noise, below the start threshold
+        assert ep.feed(frame(260)) is EndState.SPEAKING
+    assert [ep.feed(frame(50)) for _ in range(6)][-1] is EndState.DONE
+
+
+def test_click_to_stop_waits_through_long_pauses_until_finish():
+    ep = Endpointer(EndpointerConfig(end_silence_s=0.4, stop_on_silence=False))
+    for _ in range(8):
+        ep.feed(frame(3000))
+    for _ in range(60):  # ~5 s pause
+        assert ep.feed(frame(50)) is EndState.SPEAKING
+    assert ep.finish() is EndState.DONE and ep.audio().size > 0
+
+
+def test_finish_before_any_speech_reports_no_speech():
+    ep = Endpointer(EndpointerConfig())
+    ep.feed(frame(50))
+    assert ep.finish() is EndState.NO_SPEECH

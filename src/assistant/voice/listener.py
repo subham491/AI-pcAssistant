@@ -1,4 +1,4 @@
-"""Microphone loop: wake word or hotkey -> capture one utterance -> callback.
+"""Microphone loop: click / hotkey (or optional wake word) -> capture one utterance -> callback.
 
 Runs on its own thread. The model never hears raw audio; only the final
 transcript leaves this module (through on_utterance -> STT -> orchestrator).
@@ -28,6 +28,11 @@ def beep(freq: int = 880, ms: int = 90) -> None:
         threading.Thread(target=winsound.Beep, args=(freq, ms), daemon=True).start()
 
 
+def voice_level(rms_int16: float) -> float:
+    """Map microphone RMS to 0..1 for the on-screen meter (square root: quiet speech still shows)."""
+    return float(min(1.0, max(0.0, rms_int16 / 6000.0)) ** 0.5)
+
+
 class WakeWord:
     def __init__(self, cfg: VoiceConfig) -> None:
         from openwakeword.model import Model
@@ -51,14 +56,17 @@ class Listener:
         on_state: Callable[[str], None],
         is_speaking: Callable[[], bool],
         wake_muted: Callable[[], bool],
+        on_level: Callable[[float], None] = lambda _level: None,  # 0..1 while you talk, for the orb
     ) -> None:
         self.cfg = cfg
         self.on_utterance = on_utterance
         self.on_state = on_state
         self.is_speaking = is_speaking
         self.wake_muted = wake_muted
+        self.on_level = on_level
         self._frames: queue.Queue[np.ndarray] = queue.Queue(maxsize=200)
         self._trigger = threading.Event()
+        self._cancel = threading.Event()
         self._closing = threading.Event()
         self._wake: WakeWord | None = None
         self._stream = None
@@ -86,8 +94,12 @@ class Listener:
             self._stream.close()
 
     def trigger(self) -> None:
-        """Push-to-talk: start capturing now, no wake word needed."""
+        """Click / hotkey to talk: start capturing now; while capturing, finish and send."""
         self._trigger.set()
+
+    def cancel(self) -> None:
+        """Stop listening and throw away what was heard (kill switch)."""
+        self._cancel.set()
 
     def _on_audio(self, indata, _frames, _time, status) -> None:  # type: ignore[no-untyped-def]
         if status:
@@ -98,14 +110,20 @@ class Listener:
             pass  # we are behind; dropping audio beats unbounded memory
 
     def _run(self) -> None:
-        ep_cfg = EndpointerConfig(end_silence_s=self.cfg.end_silence_s, max_utterance_s=self.cfg.max_utterance_s,
-                                  no_speech_timeout_s=self.cfg.no_speech_timeout_s)
-        endpointer = Endpointer(ep_cfg)
-        phrase_mode = bool(self.cfg.wake_word_enabled and self.cfg.wake_phrase)
+        v = self.cfg
+        # After a click / hotkey you get a patient endpointer (long pauses are fine, or no
+        # silence stop at all). Room speech in wake-phrase mode keeps a short one.
+        manual_ep = Endpointer(EndpointerConfig(
+            end_silence_s=v.end_silence_s, max_utterance_s=v.max_utterance_s,
+            no_speech_timeout_s=v.no_speech_timeout_s, stop_on_silence=v.stop_on_silence))
+        ambient_ep = Endpointer(EndpointerConfig(
+            end_silence_s=v.wake_end_silence_s, max_utterance_s=30.0, no_speech_timeout_s=5.0))
+        endpointer = ambient_ep
+        phrase_mode = bool(v.wake_word_enabled and v.wake_phrase)
         capturing = False
         # Wake-phrase mode: room speech is captured quietly and handed to STT, which keeps it
         # only if it starts with the phrase. `ambient` marks such a capture (no beep, no status).
-        # shortcut: continuous talk (TV, music) is transcribed in max_utterance_s chunks and
+        # shortcut: continuous talk (TV, music) is transcribed in 30 s chunks and
         # dropped; add a cheaper pre-filter if that GPU use ever matters.
         ambient = False
         while not self._closing.is_set():
@@ -114,6 +132,15 @@ class Listener:
             except queue.Empty:
                 frame = None
 
+            if self._cancel.is_set():
+                self._cancel.clear()
+                self._trigger.clear()
+                if capturing and not ambient:
+                    self.on_level(0.0)
+                    self.on_state("idle")
+                capturing = ambient = False
+                continue
+
             if not capturing or ambient:
                 woke = self._trigger.is_set()
                 may_listen = frame is not None and not woke and not self.is_speaking() and not self.wake_muted()
@@ -121,14 +148,17 @@ class Listener:
                     woke = self._wake.detect(frame)
                 elif may_listen and phrase_mode:
                     if not ambient:
+                        endpointer = ambient_ep
                         endpointer.reset()
                     capturing = ambient = True
                 elif frame is not None and not woke:
                     capturing = ambient = False  # speaking or on a call: drop a half-heard capture
-                    endpointer.noise = 0.95 * endpointer.noise + 0.05 * float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+                    ambient_ep.noise = 0.95 * ambient_ep.noise + 0.05 * float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
                 if woke:
                     self._trigger.clear()
                     self._drain()  # drop audio queued before the wake
+                    manual_ep.noise = ambient_ep.noise  # what the room sounded like until now
+                    endpointer = manual_ep
                     endpointer.reset()
                     capturing, ambient = True, False
                     beep()
@@ -137,19 +167,27 @@ class Listener:
                 if not ambient:
                     continue
 
-            if frame is None:
+            if not ambient and self._trigger.is_set():  # second click / hotkey: "I'm done"
+                self._trigger.clear()
+                state = endpointer.finish()
+            elif frame is None:
                 continue
-            state = endpointer.feed(frame)
+            else:
+                state = endpointer.feed(frame)
+                if not ambient:
+                    self.on_level(voice_level(endpointer.level))
             if state in (EndState.DONE, EndState.TOO_LONG):
                 capturing = False
                 if not ambient:
                     beep(660, 70)
+                    self.on_level(0.0)
                     self.on_state("transcribing")
                 self.on_utterance(endpointer.audio(), ambient)
                 ambient = False
             elif state is EndState.NO_SPEECH:
                 capturing = False
                 if not ambient:
+                    self.on_level(0.0)
                     self.on_state("idle")
                 ambient = False
 

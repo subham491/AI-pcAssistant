@@ -41,22 +41,30 @@ class BrainConfig:
 @dataclass
 class VoiceConfig:
     enabled: bool = True
-    wake_word_enabled: bool = True
+    # Off by default: the mic is only read after you click the orb or press the talk hotkey.
+    wake_word_enabled: bool = False
     # openWakeWord pre-trained model name, or a path to your own .onnx model.
     wake_word_model: str = "hey_jarvis"
     wake_word_threshold: float = 0.5
     # Any phrase, e.g. "hellbot". When set, the phrase is spotted with Whisper instead of the
     # openWakeWord model above: no training needed, and it follows your own pronunciation.
     wake_phrase: str = ""
-    stt_model: str = "small.en"  # faster-whisper size; "small" for non-English
+    # "auto" = large-v3-turbo (much better with accents than the small models). Any faster-whisper
+    # size works ("small.en" is ~6x lighter), as does a Hugging Face repo id or folder of a
+    # CTranslate2 Whisper model, e.g. a fine-tune for your accent.
+    stt_model: str = "auto"
+    stt_beam_size: int = 0  # 0 = auto: 5 on a GPU, 1 on the CPU (faster)
     stt_device: str = "auto"  # auto | cuda | cpu
     stt_compute_type: str = "auto"  # auto picks float16 on CUDA, int8 on CPU
     language: str | None = "en"
     # Words Whisper should expect (project names, jargon). Biggest accuracy win.
     vocabulary: list[str] = field(default_factory=list)
-    end_silence_s: float = 0.7  # silence that ends an utterance
-    max_utterance_s: float = 30.0
-    no_speech_timeout_s: float = 5.0  # give up if you say nothing after waking
+    # After a click / hotkey: False = keep listening until you click or press the hotkey again.
+    stop_on_silence: bool = True
+    end_silence_s: float = 2.0  # pause that ends what you are saying (stop_on_silence only)
+    max_utterance_s: float = 120.0
+    no_speech_timeout_s: float = 8.0  # give up if you say nothing after the click
+    wake_end_silence_s: float = 0.8  # pause that ends speech heard in wake-phrase mode
     tts_enabled: bool = True
     tts_rate: int = 185  # SAPI words per minute
     tts_voice: str | None = None  # substring of a Windows voice name
@@ -66,6 +74,14 @@ class VoiceConfig:
         default_factory=lambda: ["teams", "zoom", "webex", "slack", "discord", "skype"]
     )
     input_device: str | int | None = None  # None = Windows default mic
+
+
+@dataclass
+class UiConfig:
+    name: str = "Hellbot"  # shown on the orb card and tray, and what the assistant calls itself
+    corner: str = "bottom-right"  # bottom-right | bottom-left | top-right | top-left
+    monitor: int = 0  # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
+    answer_hide_s: float = 12.0  # the answer card folds back into the orb after this long; 0 = never
 
 
 @dataclass
@@ -153,6 +169,7 @@ class Config:
     brain: BrainConfig = field(default_factory=BrainConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
+    ui: UiConfig = field(default_factory=UiConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     remote: RemoteConfig = field(default_factory=RemoteConfig)
@@ -179,6 +196,9 @@ class Config:
         return self.home / ".state"
 
 
+CORNERS = ("bottom-right", "bottom-left", "top-right", "top-left")
+
+
 class ConfigError(ValueError):
     pass
 
@@ -194,6 +214,7 @@ _SECTIONS = {
     "brain": BrainConfig,
     "voice": VoiceConfig,
     "hotkeys": HotkeyConfig,
+    "ui": UiConfig,
     "capture": CaptureConfig,
     "safety": SafetyConfig,
     "remote": RemoteConfig,
@@ -241,4 +262,6 @@ def load_config(home: Path | None = None) -> Config:
     for name, cls in _SECTIONS.items():
         if name in data:
             setattr(cfg, name, _coerce(cls, name, data[name]))
+    if cfg.ui.corner not in CORNERS:
+        raise ConfigError(f"[ui].corner: {cfg.ui.corner!r} is not one of {', '.join(CORNERS)}")
     return cfg
