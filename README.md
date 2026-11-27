@@ -240,8 +240,13 @@ Recipes:
 - **New desktop tool for Claude:** add a `@tool` in `desktop/tools.py`, then give it a tier in
   `policy.py` (`DESKTOP_OBSERVE` / `DESKTOP_REVERSIBLE` / `DESKTOP_CONSEQUENTIAL`). Unclassified
   tools default to "ask".
-- **Different voice (Piper, Kokoro):** replace `Speaker` in `voice/tts.py`; keep `say()`,
-  `stop()` and `speaking`.
+- **Natural voice (Pocket TTS):** `pip install -e ".[natural-voice]"`, then in `[voice]` set
+  `tts_engine = "pocket"` and `tts_voice` to a built-in name (`"javert"`) or the full path of a
+  voice file from `pocket-tts export-voice`. It runs on the CPU and falls back to the Windows
+  voice if it cannot load. Cloning from your own audio needs the gated Kyutai weights
+  (accept the terms on Hugging Face, then `hf auth login`).
+- **Another voice engine (Piper, Kokoro):** add it next to `PocketVoice` in `voice/tts.py`; keep
+  `say()`, `stop()` and `speaking`.
 
 ### Tests
 
@@ -266,7 +271,7 @@ The blueprint left these open. Each is a default in `config.toml` or a small cod
 | GPU | Auto: NVIDIA GPU if usable, else CPU | `stt_device`; setup adds CUDA libs when `nvidia-smi` exists |
 | Speech model | Whisper `large-v3-turbo` (`stt_model = "auto"`), spoken English | The small models mishear accented English; turbo keeps the large model's hearing with a small decoder. `language = "hi"` etc. for other languages (turbo is multilingual) |
 | Wake word vs click to talk | Click the orb or Ctrl+Alt+Space; wake word off | `wake_word_enabled = true` adds "Hey Jarvis" or your own `wake_phrase` |
-| Voice out | Windows built-in voices (SAPI) | Local, zero setup, interruptible. Piper is a swap-in |
+| Voice out | Windows built-in voices (SAPI) | Local, zero setup, interruptible. `tts_engine = "pocket"` switches to Pocket TTS for a natural or cloned voice |
 | End-of-speech | Second click, or 2 s of silence. Adaptive energy detector + Whisper's Silero VAD trim | Simple and deterministic; streaming Silero is a swap-in in `voice/endpoint.py` |
 | Window capture | `mss` region grab of the focused window | Windows.Graphics.Capture is the upgrade (true per-window, no overlap) |
 | Remote mode trigger | Automatic when an RDP client is focused, plus voice override | `remote_desktop_processes` |

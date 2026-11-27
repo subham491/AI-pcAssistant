@@ -1,16 +1,23 @@
-"""Speech out with the Windows built-in voices (SAPI), interruptible.
+"""Speech out, interruptible: Windows built-in voices (SAPI) or Pocket TTS.
 
 SAPI is local, already installed, and can be cut off mid-word, which the kill
-switch and barge-in need. Piper or Kokoro sound better; swap them in here if
-you want (README "Customising"). Off Windows this just logs the text.
+switch and barge-in need. `tts_engine = "pocket"` uses Kyutai Pocket TTS for a
+natural (optionally cloned) voice on the CPU; if it cannot load, SAPI takes
+over. Off Windows SAPI just logs the text.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import queue
 import sys
 import threading
+
+from pathlib import Path
+from typing import Any
+
+import numpy as np
 
 from ..config import VoiceConfig
 
@@ -18,6 +25,37 @@ log = logging.getLogger(__name__)
 
 _SVSF_ASYNC = 1
 _SVSF_PURGE = 2
+
+
+class PocketVoice:
+    """One Pocket TTS voice streamed to the default output device."""
+
+    def __init__(self, model: Any, state: Any, stream: Any) -> None:
+        self.model, self.state, self.stream = model, state, stream
+
+    @classmethod
+    def load(cls, voice: str | None) -> PocketVoice:
+        import sounddevice as sd
+        import torch
+        from pocket_tts import TTSModel
+
+        torch.set_num_threads(2)  # Pocket TTS needs two cores; leave the rest to Whisper and the UI
+        model = TTSModel.load_model()
+        # A voice file (.safetensors from `pocket-tts export-voice`, or a .wav) or a built-in name.
+        path = Path(voice).expanduser() if voice else None
+        state = model.get_state_for_audio_prompt(path if path and path.is_file() else voice or "alba")
+        stream = sd.OutputStream(samplerate=model.sample_rate, channels=1, dtype="float32")
+        stream.start()
+        return cls(model, state, stream)
+
+    def speak(self, text: str, stop: threading.Event) -> None:
+        for chunk in self.model.generate_audio_stream(self.state, text, stop=stop):
+            if stop.is_set():
+                break
+            self.stream.write(np.asarray(chunk, dtype="float32").reshape(-1, 1))
+        if stop.is_set():  # drop what is still buffered so the cut-off is immediate
+            self.stream.abort()
+            self.stream.start()
 
 
 class Speaker:
@@ -51,7 +89,8 @@ class Speaker:
         self._q.put(None)
 
     def _run(self) -> None:
-        voice = self._init_sapi()
+        pocket = self._init_pocket() if self.cfg.tts_engine == "pocket" else None
+        voice = None if pocket else self._init_sapi()
         while True:
             text = self._q.get()
             if text is None:
@@ -59,6 +98,9 @@ class Speaker:
             self._stop.clear()
             self._speaking.set()
             try:
+                if pocket is not None:
+                    pocket.speak(text, self._stop)
+                    continue
                 if voice is None:
                     log.info("[tts] %s", text)
                     continue
@@ -71,6 +113,14 @@ class Speaker:
                 log.exception("speech failed")
             finally:
                 self._speaking.clear()
+
+    def _init_pocket(self) -> PocketVoice | None:
+        try:
+            return PocketVoice.load(self.cfg.tts_voice)
+        except Exception:  # noqa: BLE001
+            log.exception("Pocket TTS unavailable; falling back to the Windows voice")
+            self.cfg = dataclasses.replace(self.cfg, tts_voice=None)  # a Pocket voice is not a SAPI name
+            return None
 
     def _init_sapi(self):  # type: ignore[no-untyped-def]
         if sys.platform != "win32":

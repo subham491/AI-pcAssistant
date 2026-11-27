@@ -66,8 +66,11 @@ class VoiceConfig:
     no_speech_timeout_s: float = 8.0  # give up if you say nothing after the click
     wake_end_silence_s: float = 0.8  # pause that ends speech heard in wake-phrase mode
     tts_enabled: bool = True
+    tts_engine: str = "sapi"  # sapi (Windows voices) | pocket (Pocket TTS: natural, CPU-only)
     tts_rate: int = 185  # SAPI words per minute
-    tts_voice: str | None = None  # substring of a Windows voice name
+    # sapi: substring of a Windows voice name. pocket: a built-in voice name ("javert"), or the
+    # full path of a voice file made with `pocket-tts export-voice` (or a .wav to clone).
+    tts_voice: str | None = None
     # Do not listen for the wake word while one of these apps is using the
     # microphone (you are on a call). Substring match, case-insensitive.
     mute_wake_when_mic_used_by: list[str] = field(

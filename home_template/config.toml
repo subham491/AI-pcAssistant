@@ -29,6 +29,8 @@ auth_mode = "subscription"
 vocabulary = ["Claude", "Jira", "Teams", "GitHub", "VS Code"]
 # tts_enabled = true
 # tts_voice = "Zira"               # part of a Windows voice name
+# tts_engine = "pocket"            # natural voice with Pocket TTS (pip install -e ".[natural-voice]"); then
+#                                  # tts_voice = a built-in name like "javert", or the full path of a voice file
 
 [hotkeys]
 # pynput syntax, e.g. "<ctrl>+<alt>+<space>"
