@@ -18,6 +18,8 @@ Tiers (from the blueprint, section 7):
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 import re
 import subprocess
 from dataclasses import dataclass
@@ -25,7 +27,9 @@ from enum import IntEnum
 from pathlib import Path, PurePath
 from typing import Any, Callable, Literal
 
-from .config import Config, EditMode
+from .config import Config, EditMode, Guardrails
+
+log = logging.getLogger(__name__)
 
 DESKTOP_SERVER = "desktop"  # name of our in-process MCP server
 
@@ -189,6 +193,10 @@ class Policy:
         self._sensitive_edits = [re.compile(p, re.I) for p in SENSITIVE_EDIT_PATTERNS]
         self._forbidden_cmds = [re.compile(p, re.I) for p in FORBIDDEN_COMMAND_PATTERNS]
         self._forbidden_cmds += [re.compile(p, re.I) for p in cfg.safety.extra_forbidden_commands]
+        self.guardrails: Guardrails = cfg.safety.guardrails
+        if self.guardrails is not Guardrails.ON:
+            log.warning("Safety guardrails are %s: actions run without asking%s.", self.guardrails.value,
+                        " and nothing is blocked" if self.guardrails is Guardrails.OFF else "")
 
     # -- helpers ---------------------------------------------------------
 
@@ -197,10 +205,14 @@ class Policy:
         return p if p.is_absolute() else (self.cfg.home / p)
 
     def forbidden_path(self, raw: str) -> bool:
+        if self.guardrails is Guardrails.OFF:
+            return False
         posix = _posix(self._resolve(raw))
         return any(r.search(posix) for r in self._forbidden_paths)
 
     def forbidden_command(self, command: str) -> str | None:
+        if self.guardrails is Guardrails.OFF:
+            return None
         for r in self._forbidden_cmds:
             if r.search(command):
                 return r.pattern
@@ -221,6 +233,15 @@ class Policy:
     # -- the decision ----------------------------------------------------
 
     def classify(self, tool_name: str, tool_input: dict[str, Any]) -> Decision:
+        decision = self._classify(tool_name, tool_input)
+        # Guardrails loosened: nothing waits for approval. Remote-mode and suggest-only denials stay,
+        # because those are about acting on the wrong PC or a mode you asked for, not about safety.
+        if decision.action == "ask" and self.guardrails is not Guardrails.ON:
+            return dataclasses.replace(decision, action="allow",
+                                       reason=f"Guardrails {self.guardrails.value}: {decision.reason}")
+        return decision
+
+    def _classify(self, tool_name: str, tool_input: dict[str, Any]) -> Decision:
         # 1. Credentials and system files: blocked for every tool.
         for raw in _paths_in(tool_input):
             if self.forbidden_path(raw):

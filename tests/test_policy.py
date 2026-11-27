@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from assistant.config import EditMode
+from assistant.config import EditMode, Guardrails
 from assistant.policy import Policy, Tier, desktop_tool
 
 
@@ -108,3 +108,35 @@ def test_extra_forbidden_from_config(cfg):
     p = Policy(cfg)
     assert p.classify("Bash", {"command": "terraform destroy -auto-approve"}).action == "deny"
     assert p.classify("Read", {"file_path": r"D:\private\x.txt"}).action == "deny"
+
+
+def loosened(cfg, level):
+    cfg.safety.guardrails = level
+    return Policy(cfg, git_probe=lambda p: True)
+
+
+@pytest.mark.parametrize("level", [Guardrails.NO_PROMPTS, Guardrails.OFF])
+def test_loosened_guardrails_never_ask(cfg, level):
+    p = loosened(cfg, level)
+    edit = p.classify("Edit", {"file_path": str(cfg.home / "a.py")})
+    assert edit.action == "allow" and edit.file_path == cfg.home / "a.py"  # file_path kept: undo point is recorded
+    assert p.classify("Bash", {"command": "pip install requests"}).action == "allow"
+    assert p.classify(desktop_tool("click"), {"x": 1, "y": 2}).action == "allow"
+    assert p.classify("mcp__jira__create_issue", {}).action == "allow"
+    assert p.classify("SomeNewTool", {}).action == "allow"
+
+
+def test_no_prompts_keeps_the_forbidden_tier(cfg):
+    p = loosened(cfg, Guardrails.NO_PROMPTS)
+    assert p.classify("Read", {"file_path": "~/.ssh/id_ed25519"}).action == "deny"
+    assert p.classify("Bash", {"command": "reg add HKLM\\Software\\X"}).action == "deny"
+
+
+def test_off_blocks_nothing_but_keeps_remote_and_suggest_modes(cfg):
+    p = loosened(cfg, Guardrails.OFF)
+    assert p.classify("Read", {"file_path": "~/.ssh/id_ed25519"}).action == "allow"
+    assert p.classify("Bash", {"command": "reg add HKLM\\Software\\X"}).action == "allow"
+    p.edit_mode = EditMode.SUGGEST
+    assert p.classify("Write", {"file_path": str(cfg.home / "a.py"), "content": ""}).action == "deny"
+    p.remote_mode = True
+    assert p.classify("Bash", {"command": "dir"}).action == "deny"
