@@ -1,6 +1,6 @@
 """Command line: `pc-assistant [run|text|doctor|login|init]`.
 
-    run     the full app: tray, overlay, voice, hotkeys (default)
+    run     the full app: orb, tray, voice, hotkeys (default)
     text    type to it in the terminal; no mic, no GUI. Best first test.
     doctor  check every dependency and print what is missing
     login   open Claude Code to sign in with your Claude subscription
@@ -111,7 +111,7 @@ def doctor(cfg: Config) -> int:
 
     for mod, why in [("faster_whisper", "speech-to-text"), ("openwakeword", "wake word"), ("sounddevice", "microphone"),
                      ("mss", "screenshots"), ("pynput", "hotkeys/input"), ("psutil", "kill switch"),
-                     ("PySide6", "overlay"), ("win32com.client", "spoken replies (SAPI)"),
+                     ("PySide6", "the orb and tray"), ("win32com.client", "spoken replies (SAPI)"),
                      ("uiautomation", "UI Automation")]:
         try:
             importlib.import_module(mod)

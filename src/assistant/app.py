@@ -59,8 +59,10 @@ def run_gui(cfg: Config) -> int:
     from PySide6.QtWidgets import QApplication
 
     from .ui.orb import Orb
-    from .ui.overlay import Overlay, QtSink, Tray
+    from .ui.pill import ActionPill
+    from .ui.speech import SpeechBubble
     from .ui.trail import TrailWindow
+    from .ui.tray import QtSink, Tray
     from .voice.tts import Speaker
 
     app = QApplication([])
@@ -83,7 +85,7 @@ def run_gui(cfg: Config) -> int:
         if listener is not None:
             listener.trigger()
         else:
-            sink.activity("No microphone: type in the chat instead.")
+            log.info("no microphone: opening the type box instead")
             bridge.toggle.emit()
 
     def stop_all() -> None:
@@ -95,14 +97,30 @@ def run_gui(cfg: Config) -> int:
         toggle = Signal()
 
     bridge = Bridge()
-    overlay = Overlay(orch, sink, cfg.home, name=name, hide_after_s=cfg.ui.answer_hide_s)
-    tray = Tray(orch, overlay, sink, cfg.home, lambda: quit_app(), name=name, on_talk=talk)
     orb = Orb(name, _pretty_hotkey(cfg.hotkeys.talk), cfg.state_dir / "orb.json")
     orb.place(cfg.ui.corner, cfg.ui.monitor)
-    overlay.follow(orb)
+    # There is no answer card. What Hellbot hears and says floats beside the orb as smoke
+    # (click-through); anything that needs a click is one small pill, shown only while needed.
+    speech = SpeechBubble(orb)
+    pill = ActionPill(orb, orch, cfg.state_dir / "snippets", name=name)
+    tray = Tray(orch, sink, cfg.home, lambda: quit_app(), name=name, on_talk=talk,
+                on_type=pill.toggle_typing, on_copy_answer=pill.copy_last_answer)
     orb.clicked.connect(talk)
     orb.menu_requested.connect(tray.popup)
-    orb.moved.connect(overlay.orb_moved)
+    orb.moved.connect(speech.reposition)
+    orb.moved.connect(pill.reposition)
+    pill.resized.connect(speech.set_lift)
+    sink.sig_status.connect(speech.on_status)
+    sink.sig_status.connect(pill.on_status)
+    sink.sig_transcript.connect(speech.on_transcript)
+    sink.sig_transcript.connect(pill.on_transcript)
+    sink.sig_spoken.connect(speech.on_spoken)
+    sink.sig_assistant.connect(pill.on_assistant)
+    sink.sig_code.connect(pill.on_code)
+    sink.sig_approval.connect(pill.on_approval)
+    sink.sig_approval_closed.connect(pill.on_approval_closed)
+    sink.sig_activity.connect(lambda text: log.info("activity: %s", text))  # the raw log lives in logs/ only
+    speaker.on_sentence = sink.sig_spoken.emit  # called on the voice thread; the signal queues it to the GUI
     sink.sig_status.connect(orb.set_status)
     sink.sig_level.connect(orb.set_level)
     if cfg.ui.trail:
@@ -114,7 +132,7 @@ def run_gui(cfg: Config) -> int:
         orb.moved.connect(trail.reposition)
     else:
         sink.sig_turn_finished.connect(orb.turn_finished)
-    bridge.toggle.connect(overlay.toggle)
+    bridge.toggle.connect(pill.toggle_typing)
     core.start()
 
     stt_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt")
@@ -204,12 +222,12 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
         listener.start()
     except Exception as exc:  # noqa: BLE001 - no mic should not stop the app
         log.exception("microphone unavailable")
-        sink.activity(f"Microphone unavailable ({exc}); type in the overlay instead.")
+        sink.activity(f"Microphone unavailable ({exc}); press {_pretty_hotkey(cfg.hotkeys.toggle_overlay)} to type instead.")
         return None
     return listener
 
 
-def _start_hotkeys(cfg: Config, talk, stop_all, toggle_overlay):  # type: ignore[no-untyped-def]
+def _start_hotkeys(cfg: Config, talk, stop_all, toggle_typing):  # type: ignore[no-untyped-def]
     try:
         from pynput import keyboard
     except ImportError:
@@ -217,7 +235,7 @@ def _start_hotkeys(cfg: Config, talk, stop_all, toggle_overlay):  # type: ignore
 
     try:
         hk = keyboard.GlobalHotKeys({cfg.hotkeys.talk: talk, cfg.hotkeys.stop: stop_all,
-                                     cfg.hotkeys.toggle_overlay: toggle_overlay})
+                                     cfg.hotkeys.toggle_overlay: toggle_typing})
         hk.start()
         return hk
     except Exception:  # noqa: BLE001 - bad hotkey syntax in config

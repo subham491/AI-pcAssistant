@@ -90,7 +90,7 @@ class UiConfig:
     name: str = "Hellbot"  # shown on the orb card and tray, and what the assistant calls itself
     corner: str = "bottom-right"  # bottom-right | bottom-left | top-right | top-left
     monitor: int = 0  # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
-    answer_hide_s: float = 12.0  # the answer card folds back into the orb after this long; 0 = never
+    answer_hide_s: float = 12.0  # unused: the answer card is gone. Kept so older config.toml files still load.
     trail: bool = True  # puffs above the orb that show each step Claude takes
 
 
@@ -98,7 +98,7 @@ class UiConfig:
 class HotkeyConfig:
     talk: str = "<ctrl>+<alt>+<space>"  # pynput syntax
     stop: str = "<ctrl>+<alt>+q"  # kill switch
-    toggle_overlay: str = "<ctrl>+<alt>+o"
+    toggle_overlay: str = "<ctrl>+<alt>+o"  # opens the type-instead-of-talking box (the name predates it)
 
 
 @dataclass

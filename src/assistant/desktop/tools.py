@@ -110,15 +110,15 @@ def build_desktop_server(capturer: ScreenCapturer, ui: UiSink, remote: bool = Fa
         return _text(await asyncio.to_thread(control.ui_tree, int(args.get("max_depth") or 4)))
 
     @tool("show_code",
-          "Show code or a diff in the user's overlay with a Copy button. Use this in suggest-only and remote mode "
-          "instead of editing files.",
+          "Hand code, a diff or any long text to the user as a pill beside the orb, with Copy and Open-in-editor "
+          "buttons. It is not read aloud. Use this in suggest-only and remote mode instead of editing files.",
           {"type": "object",
            "properties": {"code": {"type": "string"}, "language": {"type": "string"}, "title": {"type": "string"}},
            "required": ["code"]})
     @_guard
     async def show_code(args: dict[str, Any]) -> Result:
         ui.show_code(str(args.get("title") or "Code"), str(args["code"]), str(args.get("language") or ""))
-        return _text("Shown to the user with a Copy button.")
+        return _text("Handed to the user as a pill with Copy and Open-in-editor buttons.")
 
     @tool("open_url", "Open an http(s) URL in the default browser.",
           {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]})

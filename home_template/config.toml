@@ -12,7 +12,6 @@ auth_mode = "subscription"
 # name = "Hellbot"                 # shown on the orb's card and tray; what the assistant calls itself
 # corner = "bottom-right"          # bottom-right | bottom-left | top-right | top-left (or just drag the orb)
 # monitor = 0                      # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
-# answer_hide_s = 12               # the answer card folds away this long after the answer; 0 = never
 # trail = true                     # puffs above the orb that show each step ("reading… todo.md"); false = no puffs
 
 [voice]
@@ -37,7 +36,7 @@ vocabulary = ["Claude", "Jira", "Teams", "GitHub", "VS Code"]
 # pynput syntax, e.g. "<ctrl>+<alt>+<space>"
 # talk = "<ctrl>+<alt>+<space>"
 # stop = "<ctrl>+<alt>+q"
-# toggle_overlay = "<ctrl>+<alt>+o"
+# toggle_overlay = "<ctrl>+<alt>+o"   # opens the box to type instead of talking
 
 [capture]
 # main_monitor = 0                 # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
