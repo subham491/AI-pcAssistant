@@ -206,6 +206,8 @@ class Brain:
                 "PostToolUseFailure": [HookMatcher(matcher=None, hooks=[self._post_tool_failure])],
             },
             include_partial_messages=True,
+            # A PNG screenshot of a photo-heavy screen passes the SDK's 1 MB default and kills the reader.
+            max_buffer_size=16 * 1024 * 1024,
             max_turns=self.cfg.brain.max_turns,
             model=self.cfg.brain.model,
             resume=resume,

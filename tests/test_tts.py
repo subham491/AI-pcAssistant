@@ -7,16 +7,19 @@ from assistant.voice.tts import PocketVoice
 
 class FakeStream:
     def __init__(self):
-        self.written, self.aborted, self.started = [], 0, 0
+        self.written, self.aborted, self.closed = [], 0, 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.closed += 1
 
     def write(self, data):
         self.written.append(data)
 
     def abort(self):
         self.aborted += 1
-
-    def start(self):
-        self.started += 1
 
 
 class FakeModel:
@@ -32,13 +35,23 @@ class FakeModel:
 
 def test_pocket_voice_plays_every_chunk_as_mono_frames():
     stream = FakeStream()
-    PocketVoice(FakeModel(), object(), stream).speak("hello", threading.Event())
+    PocketVoice(FakeModel(), object(), lambda: stream).speak("hello", threading.Event())
     assert [c.shape for c in stream.written] == [(480, 1)] * 4
-    assert stream.aborted == 0
+    assert (stream.aborted, stream.closed) == (0, 1)
 
 
-def test_pocket_voice_stop_cuts_off_and_reopens_the_stream():
+def test_pocket_voice_stop_cuts_off_immediately():
     stream = FakeStream()
-    PocketVoice(FakeModel(stop_after=2), object(), stream).speak("hello", threading.Event())
+    PocketVoice(FakeModel(stop_after=2), object(), lambda: stream).speak("hello", threading.Event())
     assert len(stream.written) == 2  # nothing after the stop
-    assert (stream.aborted, stream.started) == (1, 1)  # buffered audio dropped, ready for the next reply
+    assert (stream.aborted, stream.closed) == (1, 1)  # buffered audio dropped
+
+
+def test_pocket_voice_opens_a_fresh_stream_for_each_sentence():
+    # A stream opened once at startup stays on that speaker even after you switch the
+    # Windows default (headset -> monitor), so Hellbot went silent while YouTube played.
+    streams = []
+    voice = PocketVoice(FakeModel(), object(), lambda: streams.append(FakeStream()) or streams[-1])
+    voice.speak("one", threading.Event())
+    voice.speak("two", threading.Event())
+    assert len(streams) == 2 and all(s.closed == 1 for s in streams)
