@@ -213,6 +213,7 @@ Most improvements need **no Python at all**:
 | A speech model tuned for your accent | `stt_model` = the Hugging Face repo id (or a local folder) of any Whisper model in CTranslate2 format |
 | A different name, corner or screen for the orb | `[ui] name`, `corner`, `monitor` |
 | More commands to run without asking | `[safety] bash_allow_prefixes` |
+| No approval prompts at all | `[safety] guardrails = "no_prompts"` (forbidden tier stays blocked) or `"off"` (nothing blocked: a misheard command, or text injected from a web page or file, runs unchecked). The audit log, undo points and the kill switch keep working |
 | Block more things | `[safety] extra_forbidden_commands` / `extra_forbidden_paths` (regex / path) |
 
 ### Code map (when you do want to change Python)

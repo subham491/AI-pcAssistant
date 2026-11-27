@@ -44,6 +44,8 @@ vocabulary = ["Claude", "Jira", "Teams", "GitHub", "VS Code"]
 # redact_processes = ["KeePassXC.exe", "1Password.exe", "Bitwarden.exe"]
 
 [safety]
+# guardrails = "on"                # "on" | "no_prompts" (never asks, still blocks credentials/registry/disk tools)
+#                                  # | "off" (never asks, blocks nothing: a misheard or injected instruction just runs)
 # edit_mode = "review"             # "suggest" | "review" | "auto"
 # bash_allow_prefixes = ["git status", "git diff", "git log", "ls", "dir"]
 

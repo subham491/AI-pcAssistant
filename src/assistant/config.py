@@ -23,6 +23,12 @@ class EditMode(str, Enum):
     AUTO = "auto"  # git-tracked files inside the home folder apply without asking
 
 
+class Guardrails(str, Enum):
+    ON = "on"  # ask before consequential actions, block the forbidden list (default)
+    NO_PROMPTS = "no_prompts"  # never ask; the forbidden list (credentials, registry, disks...) stays blocked
+    OFF = "off"  # never ask, block nothing. Anything the model is told or tricked into doing runs.
+
+
 class AuthMode(str, Enum):
     SUBSCRIPTION = "subscription"  # your Claude Pro/Max login (claude /login)
     API_KEY = "api_key"  # ANTHROPIC_API_KEY from the environment
@@ -120,6 +126,7 @@ class CaptureConfig:
 
 @dataclass
 class SafetyConfig:
+    guardrails: Guardrails = Guardrails.ON
     edit_mode: EditMode = EditMode.REVIEW
     # Shell commands (prefix match, case-insensitive) that run without asking.
     bash_allow_prefixes: list[str] = field(
