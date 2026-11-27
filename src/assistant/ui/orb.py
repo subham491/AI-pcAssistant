@@ -2,7 +2,10 @@
 
 Asleep (eyes closed) means the microphone is off. Click it, or press the talk
 hotkey, and it wakes and listens; click again to finish. It billows while
-thinking, and a puff drifts off towards the answer card when it replies.
+thinking, and a puff drifts off towards the answer card when it replies. While
+Claude works the eyes show what kind of step is running (scanning a file,
+darting about on a search, squinting at a command), and a finished request
+gets a short happy bounce.
 
 How it is drawn: the smoke is a "metaball" field. Every blob (head, horns,
 puffs) adds a soft bump to each pixel and the pixel is smoke where the sum passes 1,
@@ -60,6 +63,7 @@ LOOK = {
     "listening": Look((255, 77, 58), 0.55, "#ff4d3a", 30),
     "thinking": Look((255, 174, 66), 0.45, "#ffae42", 30),
     "answer": Look((255, 77, 58), 0.34, "#ff5a3d", 30),
+    "done": Look((255, 198, 92), 0.42, "#ffc65c", 30),
     "error": Look((255, 40, 40), 0.5, "#ff2a2a", 15),
 }
 
@@ -102,8 +106,48 @@ def render_smoke(size: int, scale: float, blobs: list[tuple[float, float, float]
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def blobs_for(look: str, t: float, level: float, since: float) -> list[tuple[float, float, float]]:
-    """Where the smoke is at time t (seconds). `since` = seconds in the current look."""
+DONE_S = 2.5  # how long the happy look stays after a request finishes
+GLANCE_S = 0.55  # a new step gets a look up at its puff before the eyes settle into the mood
+
+# Kind of step (assistant.steps) -> what the eyes do while it runs.
+EYES = {"read": "scan", "search": "dart", "web": "dart", "run": "squint", "edit": "squint",
+        "control": "squint", "screen": "wide"}
+
+
+def bob(look: str, since: float) -> float:
+    """Vertical offset of the whole head: one small hop when a request finishes."""
+    return -7.0 * math.sin(math.pi * since / 0.5) if look == "done" and since < 0.5 else 0.0
+
+
+def eye_pose(look: str, kind: str | None, t: float, since: float, step_age: float) -> tuple[str, float, float, float, float]:
+    """(shape, dx, dy, width x, height x) for the eyes. shape: closed | flat | happy | ember."""
+    if look == "asleep":
+        return "closed", 0.0, 0.0, 1.0, 1.0
+    if look == "error":
+        return "flat", 0.0, 0.0, 1.0, 1.0
+    if look == "done":
+        return "happy", 0.0, bob(look, since), 1.0, 1.0
+    if look == "answer":
+        return "ember", -3.5 * min(1.0, since / 0.4), 1.0, 1.0, 1.0  # reading the card to its left
+    if look == "thinking":
+        mood = EYES.get(kind or "", "up") if step_age >= GLANCE_S else "up"
+        if mood == "scan":  # reading: side to side, lids a little lowered
+            return "ember", 3.6 * math.sin(t * 3.4), 1.5, 1.0, 0.8
+        if mood == "dart":  # searching: quick jumps
+            return "ember", (-3.5, 3.0, 0.0, -2.5, 3.5, 1.0)[int(t * 2.6) % 6], -1.5, 1.0, 1.0
+        if mood == "squint":  # concentrating on a command or an edit
+            return "ember", 0.0, 1.5, 1.08, 0.42
+        if mood == "wide":
+            return "ember", 0.0, -1.0, 1.2, 1.45
+        return "ember", 2.0 * math.sin(t * 2.2), -4.5, 1.0, 1.0  # up, at the smoke
+    return "ember", 0.0, 0.0, 1.0, 1.0
+
+
+def blobs_for(look: str, t: float, level: float, since: float, trail: bool = False) -> list[tuple[float, float, float]]:
+    """Where the smoke is at time t (seconds). `since` = seconds in the current look.
+
+    `trail` = the puff trail window is showing steps, so the head keeps its own thinking puffs in.
+    """
     breathe = 1 + 0.035 * math.sin(t * 1.5)
     grow = 1.0
     if look == "listening":
@@ -112,13 +156,17 @@ def blobs_for(look: str, t: float, level: float, since: float) -> list[tuple[flo
         grow = 1.04
     r = R * grow * breathe
     lift = 4 * level if look == "listening" else 0.0
-    blobs = [(CX, CY, r)]
+    cy = CY + bob(look, since)
+    blobs = [(CX, cy, r)]
     # Horns: a base blob and a smaller tip each, leaning outwards.
     for side in (-1, 1):
-        blobs.append((CX + side * 0.56 * r, CY - 0.86 * r - lift * 0.4, 0.27 * r))
-        blobs.append((CX + side * 0.80 * r, CY - 1.22 * r - lift, 0.16 * r))
+        blobs.append((CX + side * 0.56 * r, cy - 0.86 * r - lift * 0.4, 0.27 * r))
+        blobs.append((CX + side * 0.80 * r, cy - 1.22 * r - lift, 0.16 * r))
 
-    if look in ("asleep", "thinking", "error"):
+    if look == "done" and since < 1.6:
+        p = since / 1.6  # one small celebratory wisp
+        blobs.append((CX + 14 * math.sin(p * 6), cy - 0.8 * r - 50 * p, 6 * (1 - p)))
+    elif look in ("asleep", "thinking", "error") and not (trail and look == "thinking"):
         count, period, size, reach = (3, 3.4, 7.5, 44.0) if look != "thinking" else (5, 1.5, 10.0, 56.0)
         for i in range(count):
             phase = ((t / period) + i / count) % 1.0
@@ -149,6 +197,11 @@ class Orb(QWidget):
         self.name, self.talk_hint = name, talk_hint
         self._state_file = state_file
         self.look = "asleep"
+        self._state = "idle"
+        self._kind: str | None = None  # kind of the step running now (assistant.steps)
+        self._kind_since = 0.0
+        self._trail = False
+        self._celebrate_until = 0.0
         self.level = 0.0
         self._shown_level = 0.0
         self._look_since = time.monotonic()
@@ -164,11 +217,32 @@ class Orb(QWidget):
     # -- state ---------------------------------------------------------------
 
     def set_status(self, state: str, _text: str = "") -> None:
+        self._state = state
         look = LOOKS.get(state, "asleep")
+        if state != "idle":
+            self._celebrate_until = 0.0  # anything new ends the celebration
+        elif time.monotonic() < self._celebrate_until:
+            look = "done"
         if look != self.look:
             self.look, self._look_since = look, time.monotonic()
             self._apply_look()
         self.update()
+
+    def set_step(self, kind: str | None, trail_visible: bool = False) -> None:
+        """The kind of step Claude is running (None = none), which picks the eyes."""
+        if kind != self._kind:
+            self._kind, self._kind_since = kind, time.monotonic()
+        self._trail = trail_visible
+        self.update()
+
+    def turn_finished(self, ok: bool) -> None:
+        """A request ended. If it went well, look pleased for a moment once the status goes idle."""
+        if not ok:
+            return
+        self._celebrate_until = time.monotonic() + DONE_S
+        QTimer.singleShot(int(DONE_S * 1000) + 50, lambda: self.set_status(self._state))
+        if self._state == "idle":
+            self.set_status("idle")
 
     def set_level(self, level: float) -> None:
         self.level = max(0.0, min(1.0, level))
@@ -180,6 +254,7 @@ class Orb(QWidget):
             "listening": "Listening. Click again when you are done.",
             "thinking": "Thinking…",
             "answer": f"{self.name} is answering.",
+            "done": f"Done. Click or press {self.talk_hint} to ask something else.",
             "error": "Something went wrong. Click to try again.",
         }
         self.setToolTip(tips[self.look])
@@ -193,7 +268,7 @@ class Orb(QWidget):
         level = self._shown_level if self.look == "listening" else 0.0
         look = LOOK[self.look]
         scale = self.devicePixelRatioF()
-        self._pixels = render_smoke(SIZE, scale, blobs_for(self.look, t, level, since), look.glow,
+        self._pixels = render_smoke(SIZE, scale, blobs_for(self.look, t, level, since, self._trail), look.glow,
                                     look.glow_strength * (1 + 0.5 * level), heat=level)
         h, w, _ = self._pixels.shape
         self._image = QImage(self._pixels.data, w, h, w * 4, QImage.Format_RGBA8888_Premultiplied)
@@ -208,25 +283,26 @@ class Orb(QWidget):
         colour = QColor(LOOK[self.look].eye)
         grow = 1.10 + 0.22 * level if self.look == "listening" else 1.0
         gap, ey = 9.0 * grow, CY + 2
-        dx = dy = 0.0
-        if self.look == "thinking":
-            dx, dy = 2.0 * math.sin(t * 2.2), -4.0
-        elif self.look == "answer":
-            dx, dy = -3.5 * min(1.0, since / 0.4), 1.0  # reading the card to its left
+        shape, dx, dy, wide, tall = eye_pose(self.look, self._kind, t, since, time.monotonic() - self._kind_since)
         for side in (-1, 1):
             ex = CX + side * gap + dx
-            if self.look == "asleep":
+            if shape == "closed":
                 pen = QPen(colour, 2.0, Qt.SolidLine, Qt.RoundCap)
                 p.setPen(pen)
                 p.setBrush(Qt.NoBrush)
                 p.drawArc(QRectF(ex - 4.5, ey - 4 + dy, 9, 6), 200 * 16, 140 * 16)  # closed: a small smile-arc
                 continue
-            if self.look == "error":
+            if shape == "flat":
                 p.setPen(QPen(colour, 2.2, Qt.SolidLine, Qt.RoundCap))
                 p.drawLine(QPointF(ex - 3.5, ey), QPointF(ex + 3.5, ey))
                 continue
+            if shape == "happy":  # ^ ^
+                p.setPen(QPen(colour, 2.4, Qt.SolidLine, Qt.RoundCap))
+                p.setBrush(Qt.NoBrush)
+                p.drawArc(QRectF(ex - 4.6, ey - 0.5 + dy, 9.2, 8.4), 20 * 16, 140 * 16)
+                continue
             blink = 0.12 if (t % 4.3) < 0.12 else 1.0
-            w, h = 7.5 * grow, (6.0 + 3.0 * level) * blink
+            w, h = 7.5 * grow * wide, (6.0 + 3.0 * level) * blink * tall
             p.setPen(Qt.NoPen)
             halo = QColor(colour)
             halo.setAlpha(70)

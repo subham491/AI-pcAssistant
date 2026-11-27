@@ -91,6 +91,7 @@ class UiConfig:
     corner: str = "bottom-right"  # bottom-right | bottom-left | top-right | top-left
     monitor: int = 0  # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
     answer_hide_s: float = 12.0  # the answer card folds back into the orb after this long; 0 = never
+    trail: bool = True  # puffs above the orb that show each step Claude takes
 
 
 @dataclass

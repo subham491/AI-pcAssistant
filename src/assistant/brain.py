@@ -44,6 +44,7 @@ from .config import AuthMode, Config
 from .desktop.capture import Shot
 from .diffs import UndoJournal, preview_edit
 from .policy import FILE_EDIT_TOOLS, Decision, Policy
+from .steps import describe
 from .ui.sink import ApprovalRequest, UiSink
 
 log = logging.getLogger(__name__)
@@ -186,6 +187,7 @@ class Brain:
         self._client: ClaudeSDKClient | None = None
         self._connect_lock = asyncio.Lock()
         self._fresh_next = False
+        self._steps: set[str] = set()  # tool calls the UI has been told about and that are still running
 
     # -- options ---------------------------------------------------------
 
@@ -201,6 +203,7 @@ class Brain:
             hooks={
                 "PreToolUse": [HookMatcher(matcher=None, hooks=[self._pre_tool_use])],
                 "PostToolUse": [HookMatcher(matcher=None, hooks=[self._post_tool_use])],
+                "PostToolUseFailure": [HookMatcher(matcher=None, hooks=[self._post_tool_failure])],
             },
             include_partial_messages=True,
             max_turns=self.cfg.brain.max_turns,
@@ -271,6 +274,7 @@ class Brain:
         async def one() -> Any:
             yield message
 
+        self._steps.clear()
         await self._client.query(one())
         texts: list[str] = []
         result = TurnResult(text="")
@@ -288,7 +292,7 @@ class Brain:
                         texts.append(block.text)
                         self.ui.assistant_text(block.text)
                     elif isinstance(block, ToolUseBlock):
-                        self.ui.activity(f"→ {block.name}")
+                        self._step_started(block.id, block.name, block.input)
             elif isinstance(msg, SystemMessage):
                 if msg.subtype == "init":
                     sid = msg.data.get("session_id")
@@ -307,6 +311,24 @@ class Brain:
 
     # -- policy plumbing -------------------------------------------------
 
+    # -- live steps for the UI ---------------------------------------------
+
+    def _step_started(self, step_id: str | None, name: str, tool_input: Any) -> None:
+        """Tell the UI once per tool call. Both the message stream and the PreToolUse hook report a
+        call and their order is not guaranteed, so whichever comes first wins."""
+        if not step_id or step_id in self._steps:
+            return
+        self._steps.add(step_id)
+        step = describe(step_id, name, tool_input)
+        self.ui.status("thinking", "Working…")  # it may have been "speaking" a lead-in sentence
+        self.ui.step_started(step)
+        self.ui.activity(f"→ {name} {step.detail or step.label}".rstrip())
+
+    def _step_finished(self, step_id: str | None, ok: bool, note: str = "") -> None:
+        if step_id and step_id in self._steps:
+            self._steps.discard(step_id)
+            self.ui.step_finished(step_id, ok, note)
+
     async def _pre_tool_use(self, hook_input: Any, tool_use_id: str | None, _ctx: Any) -> dict[str, Any]:
         """Runs for every tool call, even ones a settings allow rule would auto-approve."""
         name = hook_input.get("tool_name", "")
@@ -314,8 +336,11 @@ class Brain:
         decision = self.policy.classify(name, tool_input)
         self.audit.write("tool_decision", tool=name, tier=int(decision.tier), action=decision.action,
                          reason=decision.reason, input=tool_input, tool_use_id=tool_use_id)
+        if not hook_input.get("agent_id"):  # a helper agent's own calls stay out of the UI, as its text does
+            self._step_started(tool_use_id, name, tool_input)
         if decision.action == "deny":
             self.ui.activity(f"✗ blocked {name}: {decision.reason}")
+            self._step_finished(tool_use_id, False, "blocked")
         elif decision.action == "allow" and decision.is_file_edit and decision.file_path:
             self.undo.record(decision.file_path)  # auto-applied edit: keep an undo point
             self.ui.activity(f"✎ auto-applied edit to {decision.file_path.name}")
@@ -328,6 +353,15 @@ class Brain:
         response = hook_input.get("tool_response")
         self.audit.write("tool_result", tool=hook_input.get("tool_name"), tool_use_id=tool_use_id,
                          response=response if isinstance(response, (str, dict, list)) else str(response))
+        self._step_finished(tool_use_id, True)
+        return {}
+
+    async def _post_tool_failure(self, hook_input: Any, tool_use_id: str | None, _ctx: Any) -> dict[str, Any]:
+        error = str(hook_input.get("error") or "failed")
+        self.audit.write("tool_failed", tool=hook_input.get("tool_name"), tool_use_id=tool_use_id, error=error)
+        first_line = error.strip().splitlines()[0] if error.strip() else "failed"
+        self.ui.activity(f"✗ {hook_input.get('tool_name', 'tool')} failed: {first_line}")
+        self._step_finished(tool_use_id, False, first_line)
         return {}
 
     def approval_request(self, tool_name: str, tool_input: dict[str, Any], decision: Decision,
@@ -349,12 +383,14 @@ class Brain:
         # Re-classify: the edit mode may have changed since the hook ran.
         decision = self.policy.classify(tool_name, tool_input)
         if decision.action == "deny":
+            self._step_finished(context.tool_use_id, False, "blocked")
             return PermissionResultDeny(message=decision.reason)
         if decision.action == "ask":
             req = self.approval_request(tool_name, tool_input, decision, context.tool_use_id or tool_name)
             approved = await self.approve(req)
             self.audit.write("approval", tool=tool_name, approved=approved, tool_use_id=context.tool_use_id)
             if not approved:
+                self._step_finished(context.tool_use_id, False, "not approved")
                 return PermissionResultDeny(message="The user declined this action. Do not retry it; ask what "
                                                     "they want instead.")
         if decision.is_file_edit and decision.file_path:

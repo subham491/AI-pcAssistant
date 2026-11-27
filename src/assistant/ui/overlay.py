@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import EditMode
+from ..steps import Step
 from .markdown import split_code_blocks
 from .sink import ApprovalRequest
 
@@ -110,6 +111,9 @@ class QtSink(QObject):
     sig_transcript = Signal(str)
     sig_assistant = Signal(str)
     sig_activity = Signal(str)
+    sig_step_started = Signal(object)
+    sig_step_finished = Signal(str, bool, str)
+    sig_turn_finished = Signal(bool)
     sig_code = Signal(str, str, str)
     sig_approval = Signal(object)
     sig_approval_closed = Signal(str, str)
@@ -127,6 +131,15 @@ class QtSink(QObject):
 
     def activity(self, text: str) -> None:
         self.sig_activity.emit(text)
+
+    def step_started(self, step: Step) -> None:
+        self.sig_step_started.emit(step)
+
+    def step_finished(self, step_id: str, ok: bool, note: str) -> None:
+        self.sig_step_finished.emit(step_id, ok, note)
+
+    def turn_finished(self, ok: bool) -> None:
+        self.sig_turn_finished.emit(ok)
 
     def show_code(self, title: str, code: str, language: str) -> None:
         self.sig_code.emit(title, code, language)

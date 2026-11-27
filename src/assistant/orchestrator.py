@@ -67,6 +67,7 @@ class Orchestrator:
         self._approvals: dict[str, asyncio.Future[bool]] = {}
         self._approval_ids = itertools.count(1)
         self._turn_task: asyncio.Task[None] | None = None
+        self._settling: asyncio.Task[None] | None = None  # waits for the voice before "Ready"
         self._remote_manual = False
         self._auth_error: AuthError | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -177,6 +178,9 @@ class Orchestrator:
             if self.busy:
                 self._say("I'm still on the last request. Say stop to cancel it.")
                 return
+            if self._settling is not None:  # the last answer's "Ready" must not land in this turn
+                self._settling.cancel()
+                self._settling = None
             self._turn_task = asyncio.create_task(self._run_turn(text))
 
     # ------------------------------------------------------------------
@@ -219,15 +223,18 @@ class Orchestrator:
         shots = await self._capture_for(text)
         self.ui.status("thinking", "Thinking…")
         chunker = SpeechChunker()
+        ok = False
 
-        def on_delta(delta: str) -> None:
-            for sentence in chunker.feed(delta):
+        def speak(sentences: list[str]) -> None:
+            for sentence in sentences:
                 self.speaker.say(sentence)
+            if sentences and self.cfg.voice.tts_enabled:
+                self.ui.status("speaking", "Speaking…")
 
         try:
-            result = await self.brain(profile).run_turn(Turn(text, shots), on_delta)
-            for sentence in chunker.flush():
-                self.speaker.say(sentence)
+            result = await self.brain(profile).run_turn(Turn(text, shots), lambda delta: speak(chunker.feed(delta)))
+            speak(chunker.flush())
+            ok = not result.is_error and not result.interrupted
             if result.is_error and not result.interrupted:
                 self._say("That didn't finish cleanly. The details are in the overlay.")
         except asyncio.CancelledError:
@@ -236,7 +243,35 @@ class Orchestrator:
             self._report_brain_error(exc)
             await self.brain(profile).close()  # reconnect (and resume) on the next turn
         finally:
+            self._settle(ok)
+
+    def _settle(self, ok: bool | None = None) -> None:
+        """Go back to "Ready", but only once the voice has finished the answer.
+
+        Called at the end of a turn (ok = how it went) and after a local reply (ok = None).
+        The wait runs as its own task so the turn itself is over and a new request is accepted.
+        """
+        if self._settling is not None:
+            self._settling.cancel()
+            self._settling = None
+
+        def done() -> None:
+            if ok is not None:
+                self.ui.turn_finished(ok)
             self.ui.status("idle", "Ready")
+
+        if not self.speaker.speaking:
+            done()
+            return
+
+        async def wait() -> None:
+            self.ui.status("speaking", "Speaking…")
+            while self.speaker.speaking:
+                await asyncio.sleep(0.1)
+            if not self.busy:  # a new turn owns the status now
+                done()
+
+        self._settling = asyncio.create_task(wait())
 
     def _report_brain_error(self, exc: BaseException) -> None:
         log.exception("brain error", exc_info=exc)
@@ -319,6 +354,8 @@ class Orchestrator:
     def _say(self, text: str) -> None:
         self.ui.activity(f"🗣 {text}")
         self.speaker.say(text)
+        if not self.busy and self.loop is not None:
+            self._settle()
 
     def _set_edit_mode(self, mode: EditMode, speak: bool) -> None:
         self.policy.edit_mode = mode
