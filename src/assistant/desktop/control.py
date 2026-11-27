@@ -2,7 +2,7 @@
 
 UI Automation first (click a control by its name), raw coordinates last.
 Every function here is T2 in the policy, so it only runs after you approve
-it in the overlay. All of it is Windows-only and untested off Windows.
+it beside the orb. All of it is Windows-only and untested off Windows.
 """
 
 from __future__ import annotations

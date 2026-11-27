@@ -87,7 +87,7 @@ def describe(step_id: str, tool_name: str, tool_input: dict[str, Any] | None) ->
     if tool_name.startswith("mcp__desktop__"):
         kind = _DESKTOP_KINDS.get(base, "control")
     elif tool_name.startswith("mcp__"):
-        kind = "other"
+        return _describe_app(step_id, tool_name, inp)
     else:
         kind = _KINDS.get(tool_name, "other")
 
@@ -118,6 +118,28 @@ def describe(step_id: str, tool_name: str, tool_input: dict[str, Any] | None) ->
         if kind == "control" and first:
             label = _short(f"{label}: {first}")
     return Step(step_id, kind, _short(label) or tool_name, detail)
+
+
+_APP_VERBS = (
+    ("search", ("search", "find", "list", "query", "lookup", "suggest")),
+    ("read", ("get", "read", "fetch", "download", "view", "export")),
+    ("edit", ("create", "send", "update", "write", "delete", "trash", "reply", "forward", "label", "unlabel",
+              "apply", "add", "remove", "move", "share", "copy", "upload", "respond", "mark", "unmark", "untrash",
+              "edit", "merge", "push", "resolve")),
+)
+
+
+def _describe_app(step_id: str, tool_name: str, inp: dict[str, Any]) -> Step:
+    """A connected app's tool, e.g. mcp__claude_ai_Gmail__search_threads -> "Gmail: category:updates"."""
+    _, _, rest = tool_name.partition("mcp__")
+    server, _, action = rest.rpartition("__")
+    app = re.sub(r"^(claude_ai_|plugin_[^_]+_)", "", server).replace("_", " ").replace("-", " ").strip() or "app"
+    app = app if any(c.isupper() for c in app) else app.title()
+    words = action.replace("-", "_").split("_")
+    kind = next((k for k, verbs in _APP_VERBS if words and words[0].lower() in verbs), "other")
+    arg = next((v for v in inp.values() if isinstance(v, str) and v.strip()), "")
+    what = _short(arg, 34) if arg else " ".join(words[1:] or words)
+    return Step(step_id, kind, _short(f"{app}: {what}"), _short(f"{action} {arg}".strip(), 200))
 
 
 # ---------------------------------------------------------------------------

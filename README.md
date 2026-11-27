@@ -9,7 +9,7 @@ files with your approval, and asks before doing anything consequential.
 ```
  mic ─► orb click ─► end-of-speech ─► Whisper (local) ─► transcript ─┐
                                                                       ▼
- overlay ◄── reply text + code + approval cards ◄── orchestrator ──► Claude Code (Agent SDK)
+ the orb ◄── spoken sentence + code + approval pills ◄── orchestrator ──► Claude Code (Agent SDK)
  speaker ◄── sentences (Windows voices)                 ▲   │           │ tools
                                                         │   │           ▼
                     screenshots (focused window) ───────┘   └── safety policy (allow / ask / deny)
@@ -81,12 +81,26 @@ microphone is off**: nothing is listened to or recorded until you wake it.
 | **Click the orb**, or press **Ctrl+Alt+Space**, then speak | Beep, eyes open, it glows with your voice. It waits through pauses of up to 2 s |
 | Click the orb / press the hotkey **again** | "I'm done": it stops listening at once and transcribes locally |
 | Just stop talking | After ~2 s of silence it finishes by itself (`stop_on_silence = false` turns this off, so only the second click ends it) |
-| Press **Ctrl+Alt+O**, or right-click the orb → *Show / hide chat* | Opens the answer card with a box to type instead of talking |
-| Press **Ctrl+Alt+Q**, say "stop", or click **■ Stop** | Kill switch (see below). Also stops listening |
+| Press **Ctrl+Alt+O**, or right-click the orb → *Type instead of talking* | A one-line box opens beside the orb. Enter sends, Esc closes |
+| Press **Ctrl+Alt+Q**, say "stop", or right-click the orb → **■ Stop everything** | Kill switch (see below). Also stops listening |
 | Drag the orb | Moves it; it remembers where you put it |
 
-The answer card opens beside the orb when there is something to read (your words, the reply,
-code, an approval) and folds away ~12 s after the answer (`[ui] answer_hide_s`).
+**There is no chat window.** Everything happens at the orb:
+
+- **Your words** appear beside it as a small wisp of smoke and stay while it thinks.
+- **Its answer** appears in a smoke bubble one sentence at a time, the sentence it is speaking.
+  It fades about 1.6 s after the voice stops. With the voice off (`tts_enabled = false`) each
+  sentence stays for a reading time instead. Neither bubble ever takes the mouse or focus.
+- **Anything that needs a click** is one small pill beside the orb, shown only while needed:
+  an approval (**Yes, do it / No / View changes**, or just say "apply" / "reject"), code or
+  long text it hands you (**Copy / Open in editor**; never read aloud), or an error. *View* and
+  *Open in editor* write the content to `.assistant/snippets/` and open it in VS Code (or the
+  default app). Closing an approval pill counts as **No**.
+- **Right-click the orb** (or the tray icon) for Stop, Talk, Type instead of talking, Copy last
+  answer, the edit modes, remote mode, and the activity log.
+- The raw step-by-step log is no longer on screen; it is in `logs/assistant.log`.
+
+There is no scroll-back by design: if you missed an answer, use *Copy last answer* or ask again.
 
 **Seeing what it is doing.** While Hellbot works, each step rises out of its horns as a puff:
 "reading… todo.md", "looking… “TODO”", "running… npm test". Finished steps shrink to small ticked
@@ -102,7 +116,7 @@ while Teams, Zoom, Slack, etc. are using your microphone and ignores its own voi
 ### What it sees
 
 Nothing, unless a turn asks. Phrases like *look, this, see, screen, error, window* attach a
-screenshot of the **focused window** (not the whole screen; the overlay never counts as
+screenshot of the **focused window** (not the whole screen; Hellbot's own windows never count as
 focused). Say which screen if you mean something else:
 
 | You say | Captured |
@@ -121,7 +135,7 @@ Claude can also take screenshots itself (`mcp__desktop__screenshot`). Password m
 | Say | Effect |
 |---|---|
 | "stop", "cancel" | kill switch |
-| "apply", "yes", "go ahead" / "reject", "no" | answers the pending approval card (if none is pending, it is a normal message) |
+| "apply", "yes", "go ahead" / "reject", "no" | answers the pending approval pill (if none is pending, it is a normal message) |
 | "suggest only mode", "review mode", "auto apply mode" | switches the edit mode |
 | "remote mode" / "local mode" | forces remote mode on / back to automatic |
 | "undo that" | reverts the last applied file edit |
@@ -143,7 +157,7 @@ Claude can also take screenshots itself (`mcp__desktop__screenshot`). Password m
 |---|---|---|
 | T0 observe | read files, search, screenshots, connector reads (`get_`, `list_`, `search_`...) | runs, logged |
 | T1 reversible | file edits (per edit mode), allow-listed commands (`git status`, `ls`...), open a URL | runs, logged |
-| T2 consequential | any other shell command, clicks/typing, launching apps, connector writes, unknown tools | **approval card** |
+| T2 consequential | any other shell command, clicks/typing, launching apps, connector writes, unknown tools | **approval pill** |
 | T3 forbidden | credential files (.ssh, browser passwords, .kdbx...), registry, disk tools, `sudo`/runas, download-and-run pipes | blocked, never asked |
 
 Every decision and result goes to `logs/audit.jsonl`. The hard denials run in a PreToolUse
@@ -239,8 +253,9 @@ src/assistant/
   desktop/          capture.py (screenshots), tools.py (Claude's desktop tools), control.py (input, UIA), win32.py
   voice/            listener.py (mic + wake word), endpoint.py, stt.py (Whisper), tts.py (SAPI), speech_text.py
   steps.py          tool call -> "reading… todo.md", and which puffs show  <- change the wording here
-  ui/               orb.py (the smoke orb), trail.py (the step puffs), overlay.py (tray + answer card),
-                    sink.py (UI interface), markdown.py
+  bubbles.py        what shows beside the orb: captions (your words, the spoken sentence) and which pill is in front
+  ui/               orb.py (the smoke orb), trail.py (the step puffs), speech.py (the smoke speech bubble),
+                    pill.py (approvals, code, errors, typing), tray.py (menu + Qt signals), sink.py, markdown.py
 ```
 
 Recipes:
@@ -309,6 +324,13 @@ UI Automation, tray and hotkeys needs your first run on Windows** (see docs/QA.m
   `WindowTransparentForInput`). Painting and click-through were only checked off-screen on
   Linux; QA 1.16 to 1.20 are the Windows checks. Puffs show the step, not its result ("found 7
   matches"), and there are no live words while you talk yet.
+- No answer card: the speech bubble (click-through) and the action pill (clickable, only opened
+  when needed) replace it. Both were checked off-screen on Linux only; QA 1.21 to 1.29 are the
+  Windows checks. Known trade-offs: no scroll-back (use *Copy last answer*); the bubble follows
+  the voice sentence by sentence, not word by word; a bubble or pill that overlaps the window
+  being captured appears in that screenshot; with the voice off, the wake word is ignored
+  while a sentence is on screen (clicking the orb still works). `answer_hide_s` in config.toml
+  is now ignored.
 - The orb is drawn on the CPU (numpy) at 15 to 30 frames a second. Clicks pass through the
   transparent area around it on Windows; if they do not on your setup, report it.
 - "Stop" by voice needs a click, the hotkey or the wake word first; the always-on hotkey is the reliable
@@ -319,7 +341,7 @@ UI Automation, tray and hotkeys needs your first run on Windows** (see docs/QA.m
 - Child processes are killed by walking the process tree (psutil), not a Windows Job Object.
 - Native Windows Claude Code has no sandbox. Shell safety is the policy plus your approvals.
 - Prompt injection: text on screen, in files or tickets can try to instruct Claude. The system
-  prompt treats it as data and T2 approvals are the backstop; read approval cards.
+  prompt treats it as data and T2 approvals are the backstop; read approval pills (use View) before saying yes.
 - Not built yet (blueprint phase 4): watch mode, speaker verification, correction log.
 - The SDK is pinned (`claude-agent-sdk==0.2.189`). Upgrade deliberately: bump it in
   `pyproject.toml`, re-run `setup.ps1`, run the tests and `assistant text`.

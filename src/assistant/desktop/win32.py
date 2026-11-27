@@ -130,7 +130,7 @@ if IS_WINDOWS:
         )
 
     def foreground_window(skip_own_process: bool = True) -> WindowInfo | None:
-        """The focused window; if that is the assistant's own overlay, the one below it."""
+        """The focused window; if that is one of the assistant's own windows, the one below it."""
         hwnd = _user32.GetForegroundWindow()
         own = os.getpid()
         while hwnd:

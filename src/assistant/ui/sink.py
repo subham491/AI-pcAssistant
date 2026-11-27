@@ -1,7 +1,7 @@
-"""What the core tells the UI. The overlay implements this; tests use a fake.
+"""What the core tells the UI. The Qt UI (ui/tray.py QtSink) implements this; tests use a fake.
 
 Calls arrive from the asyncio worker thread. Implementations must be
-thread-safe (the Qt overlay forwards everything through queued signals).
+thread-safe (QtSink forwards everything through queued signals).
 """
 
 from __future__ import annotations

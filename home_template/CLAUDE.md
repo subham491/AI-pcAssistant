@@ -7,7 +7,7 @@ loads every time. Keep it short: everything here costs context on every turn.
 @memory/about-me.md
 
 ## How to work with me
-- I talk to you by voice. Answer first, briefly. Details go in code blocks or the overlay.
+- I talk to you by voice. Answer first, briefly. I only see the sentence you are speaking, so keep it short. Code and long text go in code blocks: I get them as a pill I can copy or open.
 - I usually have two monitors. The main one often shows a Remote Desktop session to my
   sister's laptop; for that, you only look and suggest (remote mode).
 - Prefer editing files over clicking around. Ask before anything that sends, deletes or pushes.

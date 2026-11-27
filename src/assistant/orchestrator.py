@@ -1,7 +1,7 @@
 """The orchestrator: the only component that knows about all the others.
 
 Voice, capture, brain and UI never call each other directly. Everything a
-user says (or types into the overlay) arrives at handle_text(); local
+user says (or types into the type box) arrives at handle_text(); local
 intents are handled here, everything else becomes a Claude turn.
 
 Runs on one asyncio loop in a worker thread. Other threads (Qt, hotkeys,
@@ -228,15 +228,15 @@ class Orchestrator:
         def speak(sentences: list[str]) -> None:
             for sentence in sentences:
                 self.speaker.say(sentence)
-            if sentences and self.cfg.voice.tts_enabled:
-                self.ui.status("speaking", "Speaking…")
+            if sentences:  # with the voice off the sentences are still shown beside the orb, one at a time
+                self.ui.status("speaking", "Speaking…" if self.cfg.voice.tts_enabled else "Answering…")
 
         try:
             result = await self.brain(profile).run_turn(Turn(text, shots), lambda delta: speak(chunker.feed(delta)))
             speak(chunker.flush())
             ok = not result.is_error and not result.interrupted
             if result.is_error and not result.interrupted:
-                self._say("That didn't finish cleanly. The details are in the overlay.")
+                self._say("That didn't finish cleanly. The details are in the activity log.")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

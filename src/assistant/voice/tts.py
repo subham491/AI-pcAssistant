@@ -62,12 +62,19 @@ class PocketVoice:
                 stream.abort()
 
 
+def reading_time(text: str) -> float:
+    """Seconds a sentence stays up when it is shown but not spoken."""
+    return min(7.0, 0.8 + 0.3 * len(text.split()))
+
+
 class Speaker:
     def __init__(self, cfg: VoiceConfig) -> None:
         self.cfg = cfg
         self._q: queue.Queue[str | None] = queue.Queue()
         self._stop = threading.Event()
         self._speaking = threading.Event()
+        # Called from the speech thread with each sentence as it starts, and None when it goes quiet.
+        self.on_sentence: Callable[[str | None], None] | None = None
         self._thread = threading.Thread(target=self._run, name="tts", daemon=True)
         self._thread.start()
 
@@ -76,8 +83,17 @@ class Speaker:
         return self._speaking.is_set() or not self._q.empty()
 
     def say(self, text: str) -> None:
-        if self.cfg.tts_enabled and text.strip():
+        # With the voice off the sentence is still queued: the bubble beside the orb shows it
+        # for about as long as it takes to read, so a muted Hellbot still answers.
+        if text.strip():
             self._q.put(text)
+
+    def _notify(self, sentence: str | None) -> None:
+        if self.on_sentence is not None:
+            try:
+                self.on_sentence(sentence)
+            except Exception:  # noqa: BLE001 - a UI hiccup must not stop the voice
+                log.debug("on_sentence failed", exc_info=True)
 
     def stop(self) -> None:
         """Cut off the current sentence and drop everything queued."""
@@ -93,20 +109,25 @@ class Speaker:
         self._q.put(None)
 
     def _run(self) -> None:
-        pocket = self._init_pocket() if self.cfg.tts_engine == "pocket" else None
-        voice = None if pocket else self._init_sapi()
+        quiet = not self.cfg.tts_enabled
+        pocket = self._init_pocket() if not quiet and self.cfg.tts_engine == "pocket" else None
+        voice = None if pocket or quiet else self._init_sapi()
         while True:
             text = self._q.get()
             if text is None:
                 return
             self._stop.clear()
             self._speaking.set()
+            self._notify(text)
             try:
                 if pocket is not None:
                     pocket.speak(text, self._stop)
                     continue
                 if voice is None:
-                    log.info("[tts] %s", text)
+                    # Voice off (or no engine here): keep the sentence on screen for about a read.
+                    if not quiet:
+                        log.info("[tts] %s", text)
+                    self._stop.wait(reading_time(text))
                     continue
                 voice.Speak(text, _SVSF_ASYNC)
                 while not voice.WaitUntilDone(50):
@@ -117,6 +138,8 @@ class Speaker:
                 log.exception("speech failed")
             finally:
                 self._speaking.clear()
+                if self._q.empty():
+                    self._notify(None)
 
     def _init_pocket(self) -> PocketVoice | None:
         try:
