@@ -13,6 +13,7 @@ auth_mode = "subscription"
 # corner = "bottom-right"          # bottom-right | bottom-left | top-right | top-left (or just drag the orb)
 # monitor = 0                      # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
 # answer_hide_s = 12               # the answer card folds away this long after the answer; 0 = never
+# trail = true                     # puffs above the orb that show each step ("reading… todo.md"); false = no puffs
 
 [voice]
 # The mic is off until you click the orb or press the talk hotkey. Click again when you are done.

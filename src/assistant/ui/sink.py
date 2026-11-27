@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from ..steps import Step
+
 
 @dataclass(frozen=True)
 class ApprovalRequest:
@@ -22,7 +24,7 @@ class ApprovalRequest:
 
 class UiSink(Protocol):
     def status(self, state: str, text: str) -> None:
-        """state: idle | listening | thinking | speaking | waiting | error."""
+        """state: idle | listening | transcribing | thinking | speaking | waiting | error."""
 
     def transcript(self, text: str) -> None: ...
 
@@ -31,6 +33,15 @@ class UiSink(Protocol):
 
     def activity(self, text: str) -> None:
         """One-line log entry: tool calls, decisions, snapshots."""
+
+    def step_started(self, step: Step) -> None:
+        """Claude started a tool call (read a file, ran a command, ...)."""
+
+    def step_finished(self, step_id: str, ok: bool, note: str) -> None:
+        """That tool call ended. `note` says why when it failed."""
+
+    def turn_finished(self, ok: bool) -> None:
+        """The whole request is done (and spoken)."""
 
     def show_code(self, title: str, code: str, language: str) -> None: ...
 
@@ -48,6 +59,9 @@ class NullSink:
     def transcript(self, text: str) -> None: ...
     def assistant_text(self, text: str) -> None: ...
     def activity(self, text: str) -> None: ...
+    def step_started(self, step: Step) -> None: ...
+    def step_finished(self, step_id: str, ok: bool, note: str) -> None: ...
+    def turn_finished(self, ok: bool) -> None: ...
     def show_code(self, title: str, code: str, language: str) -> None: ...
     def request_approval(self, req: ApprovalRequest) -> None: ...
     def approval_closed(self, req_id: str, outcome: str) -> None: ...

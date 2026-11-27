@@ -100,3 +100,56 @@ def test_remote_profile_has_no_builtin_tools(cfg):
     assert opts.tools == [] and "Bash" in opts.disallowed_tools
     assert "REMOTE MODE" in opts.system_prompt["append"]
     assert opts.cwd == str(cfg.home)
+
+
+class StepSink(NullSink):
+    def __init__(self):
+        self.events = []
+
+    def step_started(self, step):
+        self.events.append(("start", step.id, step.kind, step.label))
+
+    def step_finished(self, step_id, ok, note):
+        self.events.append(("finish", step_id, ok, note))
+
+
+def test_steps_reach_the_ui_once_with_their_outcome(cfg):
+    brain, _, _ = make_brain(cfg)
+    brain.ui = sink = StepSink()
+
+    async def go():
+        read = {"tool_name": "Read", "tool_input": {"file_path": "notes/todo.md"}}
+        brain._step_started("t1", "Read", read["tool_input"])  # the message stream saw it first
+        await brain._pre_tool_use(read, "t1", None)  # ...then the hook: no second puff
+        await brain._post_tool_use({**read, "tool_response": "ok"}, "t1", None)
+        bash = {"tool_name": "Bash", "tool_input": {"command": "git log"}}
+        await brain._pre_tool_use(bash, "t2", None)
+        await brain._post_tool_failure({**bash, "error": "fatal: not a git repository\nhint: ..."}, "t2", None)
+        await brain._pre_tool_use({"tool_name": "Bash", "tool_input": {"command": "format C:"}}, "t3", None)
+        await brain._pre_tool_use({**read, "agent_id": "sub1"}, "t4", None)  # a helper agent's call: not shown
+        await brain._post_tool_use(read, "t4", None)
+
+    asyncio.run(go())
+    assert sink.events == [
+        ("start", "t1", "read", "todo.md"), ("finish", "t1", True, ""),
+        ("start", "t2", "run", "git log"), ("finish", "t2", False, "fatal: not a git repository"),
+        ("start", "t3", "run", "format C:"), ("finish", "t3", False, "blocked"),
+    ]
+    assert "tool_failed" in (cfg.logs_dir / "audit.jsonl").read_text()
+
+
+def test_declined_approval_ends_its_step(cfg):
+    brain, _, _ = make_brain(cfg, approve_result=False)
+    brain.ui = sink = StepSink()
+
+    async def go():
+        await brain._pre_tool_use({"tool_name": "Bash", "tool_input": {"command": "npm test"}}, "t1", None)
+        await brain._can_use_tool("Bash", {"command": "npm test"}, ctx("t1"))
+
+    asyncio.run(go())
+    assert sink.events[-1] == ("finish", "t1", False, "not approved")
+
+
+def test_failure_hook_is_registered(cfg):
+    brain, _, _ = make_brain(cfg)
+    assert {"PreToolUse", "PostToolUse", "PostToolUseFailure"} <= set(brain._options(None).hooks)

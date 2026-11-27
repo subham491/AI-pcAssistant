@@ -60,6 +60,7 @@ def run_gui(cfg: Config) -> int:
 
     from .ui.orb import Orb
     from .ui.overlay import Overlay, QtSink, Tray
+    from .ui.trail import TrailWindow
     from .voice.tts import Speaker
 
     app = QApplication([])
@@ -104,6 +105,15 @@ def run_gui(cfg: Config) -> int:
     orb.moved.connect(overlay.orb_moved)
     sink.sig_status.connect(orb.set_status)
     sink.sig_level.connect(orb.set_level)
+    if cfg.ui.trail:
+        trail = TrailWindow(orb)
+        sink.sig_status.connect(trail.on_status)
+        sink.sig_step_started.connect(trail.on_step_started)
+        sink.sig_step_finished.connect(trail.on_step_finished)
+        sink.sig_turn_finished.connect(trail.on_turn_finished)
+        orb.moved.connect(trail.reposition)
+    else:
+        sink.sig_turn_finished.connect(orb.turn_finished)
     bridge.toggle.connect(overlay.toggle)
     core.start()
 

@@ -33,6 +33,11 @@ a bug worth noting with `logs\assistant.log` and `logs\audit.jsonl`.
 | 1.13 | Ask for code ("write a python hello world") | Code appears with Copy button; it says "I've put the code on screen" instead of reading code |
 | 1.14 | Optional: `wake_word_enabled = true` + `wake_phrase = "hellbot"`, restart, say "Hellbot, what time is it" | Works without a click. On a Teams/Zoom call it does not wake |
 | 1.15 | Ctrl+Alt+Q while listening | Listening stops, nothing is sent |
+| 1.16 | Ask "read the README in my assistant folder and list my notes" | A "hmm…" puff, then one puff per step rising from the horns ("reading… README.md"). Older steps become small ticked chips above; at most four puffs. Eyes scan while reading, dart while searching, squint at commands |
+| 1.17 | While puffs are showing, click and type in a window that is behind them | The click and typing reach that window; the puffs never take focus or the mouse. The orb itself still clicks and drags |
+| 1.18 | Let a long spoken answer play | Status says "Speaking…" (not "Ready") until the voice stops; puffs fade when it starts talking. Then "all done · N steps · Ns" for ~2.5 s, happy eyes and one hop, then asleep |
+| 1.19 | Ask it to run something that fails ("run git status in C:\\Windows") | That puff turns red with the reason and stays ~8 s; the activity log has the "✗ … failed" line |
+| 1.20 | Drag the orb to the top edge of a screen, then to the second monitor, and ask something | At the top the puffs hang below the orb instead. On the other monitor they stay centred over the horns and sharp (DPI) |
 
 ## 2. Screen
 

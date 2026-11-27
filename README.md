@@ -88,6 +88,13 @@ microphone is off**: nothing is listened to or recorded until you wake it.
 The answer card opens beside the orb when there is something to read (your words, the reply,
 code, an approval) and folds away ~12 s after the answer (`[ui] answer_hide_s`).
 
+**Seeing what it is doing.** While Hellbot works, each step rises out of its horns as a puff:
+"reading… todo.md", "looking… “TODO”", "running… npm test". Finished steps shrink to small ticked
+chips above it (the last three stay), a failed one turns red with the reason, and a finished
+request ends with "all done · 3 steps · 11s". The eyes follow along: side to side while reading,
+darting while searching, squinting at a command, happy arcs when done. The puffs never take the
+mouse, so you can click whatever is behind them. `[ui] trail = false` turns the puffs off.
+
 Clicking the orb while it is talking cuts the reply off and listens. A wake word is optional
 and off by default: set `wake_word_enabled = true` (see "Make it yours"). When on, it pauses
 while Teams, Zoom, Slack, etc. are using your microphone and ignores its own voice.
@@ -231,7 +238,9 @@ src/assistant/
   config.py         every setting and its default
   desktop/          capture.py (screenshots), tools.py (Claude's desktop tools), control.py (input, UIA), win32.py
   voice/            listener.py (mic + wake word), endpoint.py, stt.py (Whisper), tts.py (SAPI), speech_text.py
-  ui/               orb.py (the smoke orb), overlay.py (tray + answer card), sink.py (UI interface), markdown.py
+  steps.py          tool call -> "reading… todo.md", and which puffs show  <- change the wording here
+  ui/               orb.py (the smoke orb), trail.py (the step puffs), overlay.py (tray + answer card),
+                    sink.py (UI interface), markdown.py
 ```
 
 Recipes:
@@ -296,6 +305,10 @@ UI Automation, tray and hotkeys needs your first run on Windows** (see docs/QA.m
   `vocabulary` and an accent-specific model (`stt_model`) are the next steps if it still mishears.
 - First run downloads the speech model (about 1.6 GB). On a PC without an NVIDIA GPU it runs
   on the CPU and can take several seconds per sentence; the activity log says so once.
+- The step puffs are a second always-on-top window that ignores the mouse (Qt's
+  `WindowTransparentForInput`). Painting and click-through were only checked off-screen on
+  Linux; QA 1.16 to 1.20 are the Windows checks. Puffs show the step, not its result ("found 7
+  matches"), and there are no live words while you talk yet.
 - The orb is drawn on the CPU (numpy) at 15 to 30 frames a second. Clicks pass through the
   transparent area around it on Windows; if they do not on your setup, report it.
 - "Stop" by voice needs a click, the hotkey or the wake word first; the always-on hotkey is the reliable

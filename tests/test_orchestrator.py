@@ -167,3 +167,65 @@ def test_stop_interrupts_and_hard_stops_a_hung_turn(cfg, monkeypatch):
         assert brain.interrupted == 1 and speaker.stopped >= 1
         assert killed and brain.closed == 1 and not orch.busy
     asyncio.run(go())
+
+
+def statuses(orch):
+    return [a[0] for name, a in orch.ui.events if name == "status"]
+
+
+def test_status_goes_ready_right_away_when_nothing_is_being_spoken(cfg):
+    async def go():
+        orch, _, _, _ = make(cfg)
+        await started(orch)
+        await orch.handle_text("what is two plus two")
+        await orch._turn_task
+        assert statuses(orch)[-2:] == ["speaking", "idle"]
+        assert ("turn_finished", (True,)) in orch.ui.events
+        assert orch._settling is None
+    asyncio.run(go())
+
+
+def test_status_stays_speaking_until_the_voice_is_done(cfg):
+    async def go():
+        orch, speaker, _, _ = make(cfg)
+        await started(orch)
+        speaker.speaking = True  # the voice is still reading the answer when Claude finishes
+        await orch.handle_text("tell me a long story")
+        await orch._turn_task
+        assert not orch.busy  # the turn is over: a new request would be accepted
+        await asyncio.sleep(0.15)
+        assert statuses(orch)[-1] == "speaking" and not any(n == "turn_finished" for n, _ in orch.ui.events)
+        speaker.speaking = False
+        await asyncio.sleep(0.25)
+        assert statuses(orch)[-1] == "idle" and orch.ui.events[-2] == ("turn_finished", (True,))
+    asyncio.run(go())
+
+
+def test_new_request_while_still_speaking_is_not_overwritten_by_the_old_ready(cfg):
+    async def go():
+        orch, speaker, _, brains = make(cfg)
+        await started(orch)
+        speaker.speaking = True
+        await orch.handle_text("first question")
+        await orch._turn_task
+        brains["local"].hang = True
+        await orch.handle_text("second question")  # barge-in
+        speaker.speaking = False
+        await asyncio.sleep(0.3)
+        assert orch.busy and statuses(orch)[-1] == "thinking"  # not "idle" from the first answer
+        await orch.stop()
+    asyncio.run(go())
+
+
+def test_local_reply_shows_speaking_too(cfg):
+    async def go():
+        orch, speaker, _, _ = make(cfg)
+        await started(orch)
+        speaker.speaking = True
+        await orch.handle_text("suggest only mode")
+        await asyncio.sleep(0.15)
+        assert statuses(orch)[-1] == "speaking"
+        speaker.speaking = False
+        await asyncio.sleep(0.25)
+        assert statuses(orch)[-1] == "idle" and not any(n == "turn_finished" for n, _ in orch.ui.events)
+    asyncio.run(go())
