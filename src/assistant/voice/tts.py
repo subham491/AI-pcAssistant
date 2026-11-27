@@ -15,7 +15,7 @@ import sys
 import threading
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -28,10 +28,10 @@ _SVSF_PURGE = 2
 
 
 class PocketVoice:
-    """One Pocket TTS voice streamed to the default output device."""
+    """One Pocket TTS voice, played on whatever is the Windows default speaker right now."""
 
-    def __init__(self, model: Any, state: Any, stream: Any) -> None:
-        self.model, self.state, self.stream = model, state, stream
+    def __init__(self, model: Any, state: Any, open_stream: Callable[[], Any]) -> None:
+        self.model, self.state, self.open_stream = model, state, open_stream
 
     @classmethod
     def load(cls, voice: str | None) -> PocketVoice:
@@ -44,18 +44,22 @@ class PocketVoice:
         # A voice file (.safetensors from `pocket-tts export-voice`, or a .wav) or a built-in name.
         path = Path(voice).expanduser() if voice else None
         state = model.get_state_for_audio_prompt(path if path and path.is_file() else voice or "alba")
-        stream = sd.OutputStream(samplerate=model.sample_rate, channels=1, dtype="float32")
-        stream.start()
-        return cls(model, state, stream)
+        # PortAudio fixes "the default device" when it starts, so a plain default stream stays on
+        # the speaker that was default at launch. The Sound Mapper resolves the default each open.
+        mapper = next((i for i, d in enumerate(sd.query_devices())
+                       if d["name"] == "Microsoft Sound Mapper - Output"), None)
+        return cls(model, state, lambda: sd.OutputStream(samplerate=model.sample_rate, channels=1,
+                                                         dtype="float32", device=mapper))
 
     def speak(self, text: str, stop: threading.Event) -> None:
-        for chunk in self.model.generate_audio_stream(self.state, text, stop=stop):
-            if stop.is_set():
-                break
-            self.stream.write(np.asarray(chunk, dtype="float32").reshape(-1, 1))
-        if stop.is_set():  # drop what is still buffered so the cut-off is immediate
-            self.stream.abort()
-            self.stream.start()
+        # A fresh stream per sentence follows the Windows default speaker if you switch it.
+        with self.open_stream() as stream:
+            for chunk in self.model.generate_audio_stream(self.state, text, stop=stop):
+                if stop.is_set():
+                    break
+                stream.write(np.asarray(chunk, dtype="float32").reshape(-1, 1))
+            if stop.is_set():  # drop what is still buffered so the cut-off is immediate
+                stream.abort()
 
 
 class Speaker:
