@@ -10,6 +10,9 @@ from assistant.intents import Kind, TargetKind, parse, screen_target, strip_wake
     ("Helbot stop!", "stop!"),
     ("Hello bot what's up", "what's up"),
     ("Hellbot.", ""),  # just the wake phrase: the app then listens for the command
+    ("What are you doing, Hellbot?", "What are you doing"),  # the name can close the sentence too
+    ("Tell Hellbot to stop now", None),  # ...but talking about it mid-sentence is not calling it
+    ("I said it three times, check the clips.", None),
     ("Hello, how are you doing today?", None),  # close, but not the wake phrase
     ("Can you help me with the report?", None),
     ("", None),

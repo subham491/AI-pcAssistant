@@ -176,7 +176,7 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
             log.exception("transcription failed")
             sink.status("error", f"Speech-to-text failed: {exc}")
             return
-        if needs_wake:  # room speech: ours only if it starts with the wake phrase
+        if needs_wake:  # room speech: ours only if it starts or ends with the wake phrase
             rest = strip_wake_phrase(text, cfg.voice.wake_phrase)
             if rest is None:
                 return

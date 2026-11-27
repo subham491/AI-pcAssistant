@@ -66,10 +66,17 @@ def resolve_model(name: str) -> str:
 
 
 def build_prompt(name: str, vocabulary: list[str]) -> str | None:
-    """Words Whisper should expect, as a short glossary. The assistant's own name goes first
-    so "Hellbot" is not heard as "hell bought"."""
-    words = list(dict.fromkeys(w.strip() for w in [name, *vocabulary] if w and w.strip()))
-    return ("Glossary: " + ", ".join(words) + ".") if words else None
+    """Words Whisper should expect. The assistant's own name goes first so "Hellbot" is not
+    heard as "hell bought".
+
+    Whisper reads the prompt as what was said just before, so it is written as speech. A list
+    header ("Glossary: ...") got echoed: a short "Hellbot" came out as "Glossary, Zip, I love you".
+    """
+    name = name.strip()
+    words = list(dict.fromkeys(w.strip() for w in vocabulary if w and w.strip() and w.strip() != name))
+    if name and words:
+        return f"{name}, we use {', '.join(words)}."
+    return f"{name or ', '.join(words)}." if name or words else None
 
 
 class SpeechToText:

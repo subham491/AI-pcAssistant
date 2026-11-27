@@ -11,7 +11,11 @@ def test_auto_model_is_the_accent_robust_one_and_explicit_names_pass_through():
 
 
 def test_prompt_puts_the_assistant_name_first_and_drops_duplicates():
-    assert build_prompt("Hellbot", ["Jira", "Hellbot", " "]) == "Glossary: Hellbot, Jira."
+    # Written as speech, never as a "Glossary:" list: with a real voice Whisper echoed the list
+    # header and turned a short "Hellbot" into "Glossary, Zip, I love you".
+    assert build_prompt("Hellbot", ["Jira", "Hellbot", " "]) == "Hellbot, we use Jira."
+    assert build_prompt("Hellbot", []) == "Hellbot."
+    assert build_prompt("", ["Jira", "Teams"]) == "Jira, Teams."
     assert build_prompt("", []) is None
 
 
@@ -37,6 +41,6 @@ def test_cpu_uses_greedy_decoding_and_warns_once_when_slow(monkeypatch):
     stt._model, stt.device = _FakeModel(0), "cpu"
     audio = np.zeros(16_000, dtype=np.float32)
     assert stt.transcribe(audio) == "fix the test"
-    assert stt._model.kwargs["beam_size"] == 1 and stt._model.kwargs["initial_prompt"] == "Glossary: Hellbot, Jira."
+    assert stt._model.kwargs["beam_size"] == 1 and stt._model.kwargs["initial_prompt"] == "Hellbot, we use Jira."
     stt.transcribe(audio)
     assert len(notes) == 1 and "small.en" in notes[0]

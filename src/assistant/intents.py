@@ -100,22 +100,24 @@ def parse(text: str) -> Intent:
 
 
 def strip_wake_phrase(text: str, phrase: str, min_ratio: float = 0.85) -> str | None:
-    """The rest of `text` if it starts with the wake phrase, else None.
+    """The rest of `text` if it starts or ends with the wake phrase, else None.
 
+    People call a name at either end ("Hellbot, open it" / "What is this, Hellbot?"); a
+    mention in the middle is talking about it, not to it.
     Fuzzy on purpose: Whisper may write "Hell bot" or "Helbot" for "Hellbot".
     0.85 keeps "hello" out while letting those spellings in.
     """
     key = re.sub(r"[\W_]", "", phrase.lower())
     words = text.split()
-    best_n, best = 0, 0.0
+    best, rest = 0.0, words
     for n in range(1, min(len(words), len(phrase.split()) + 1) + 1):
-        head = re.sub(r"[\W_]", "", "".join(words[:n]).lower())
-        ratio = difflib.SequenceMatcher(None, head, key).ratio()
-        if ratio > best:
-            best_n, best = n, ratio
+        for called, others in ((words[:n], words[n:]), (words[-n:], words[:-n])):
+            ratio = difflib.SequenceMatcher(None, re.sub(r"[\W_]", "", "".join(called).lower()), key).ratio()
+            if ratio > best:
+                best, rest = ratio, others
     if not key or best < min_ratio:
         return None
-    return " ".join(words[best_n:]).lstrip(" ,.!?:;-")
+    return " ".join(rest).lstrip(" ,.!?:;-").rstrip(" ,:;-")
 
 
 def _strip_wake(text: str) -> str:
