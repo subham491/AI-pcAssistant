@@ -4,7 +4,8 @@ import pytest
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny, ToolPermissionContext
 
 from assistant.audit import AuditLog
-from assistant.brain import (AuthError, Brain, SessionStore, Turn, build_user_message, prepare_auth_env)
+from assistant.brain import (AuthError, Brain, SessionStore, Turn, build_user_message, context_tokens,
+                             prepare_auth_env, roll_reason)
 from assistant.config import AuthMode, EditMode
 from assistant.desktop.capture import Shot
 from assistant.desktop.win32 import Rect
@@ -159,3 +160,52 @@ def test_declined_approval_ends_its_step(cfg):
 def test_failure_hook_is_registered(cfg):
     brain, _, _ = make_brain(cfg)
     assert {"PreToolUse", "PostToolUse", "PostToolUseFailure"} <= set(brain._options(None).hooks)
+
+
+def test_context_tokens_sums_what_was_read():
+    assert context_tokens(None) is None
+    assert context_tokens({}) is None
+    usage = {"input_tokens": 100, "cache_creation_input_tokens": 50, "cache_read_input_tokens": 90_000,
+             "output_tokens": 999}
+    assert context_tokens(usage) == 90_150  # output is not part of the context that gets re-read
+
+
+def test_roll_reason_over_cap_idle_disabled_and_under():
+    # over the cap
+    assert roll_reason(160_000, None, 150_000, 240) == "context"
+    # idle past the limit (just over 240 min, and well over)
+    assert roll_reason(None, 240 * 60 + 1, 150_000, 240) == "idle"
+    assert roll_reason(10_000, 5 * 3600, 150_000, 240) == "idle"
+    assert roll_reason(None, 240 * 60, 150_000, 240) is None  # exactly at the limit stays
+    # disabled: both limits 0
+    assert roll_reason(999_999, 999_999, 0, 0) is None
+    # under both caps
+    assert roll_reason(10_000, 60, 150_000, 240) is None
+    # context cap wins over idle when both would fire
+    assert roll_reason(160_000, 5 * 3600, 150_000, 240) == "context"
+
+
+def test_idle_expired_needs_a_stored_session(cfg):
+    brain, _, _ = make_brain(cfg)
+    cfg.brain.fresh_after_idle_minutes = 240
+    now = [1_000_000.0]
+    brain._now = lambda: now[0]
+    # no stored session yet -> nothing to roll
+    assert brain._idle_expired() is False
+    brain.sessions.set("local", "sess-1")
+    brain.sessions.touch("local", now[0])
+    assert brain._idle_expired() is False  # fresh
+    now[0] += 241 * 60
+    assert brain._idle_expired() is True  # idle past the limit
+    cfg.brain.fresh_after_idle_minutes = 0
+    assert brain._idle_expired() is False  # disabled
+
+
+def test_roll_clears_session_and_audits(cfg):
+    brain, _, _ = make_brain(cfg)
+    brain.sessions.set("local", "old-sess")
+    brain._roll("context", 170_000)
+    assert brain.sessions.get("local") is None
+    assert brain._fresh_next is True and brain._rolled == "context"
+    log_text = (cfg.logs_dir / "audit.jsonl").read_text()
+    assert '"session_rolled"' in log_text and '"old-sess"' in log_text and "170000" in log_text

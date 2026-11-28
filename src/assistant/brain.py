@@ -20,6 +20,7 @@ import base64
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal
@@ -111,6 +112,32 @@ class TurnResult:
     is_error: bool = False
     cost_usd: float | None = None
     interrupted: bool = False
+    rolled: str | None = None  # why the next turn starts in a fresh session ("context" | "idle"), if it does
+
+
+ROLL_NOTICE = "Starting a fresh session to keep costs down."
+
+
+def context_tokens(usage: dict[str, Any] | None) -> int | None:
+    """The size of the context one model call read: everything that went in, cached or not."""
+    if not usage:
+        return None
+    return sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens",
+                                                "cache_read_input_tokens"))
+
+
+def roll_reason(context: int | None, idle_s: float | None, max_context_tokens: int,
+                fresh_after_idle_minutes: float) -> str | None:
+    """Why the session should be replaced by a fresh one, or None to keep it.
+
+    A resumed session only grows, and every turn re-reads all of it; after a long pause the prompt
+    cache is cold as well, so the whole of it is paid for again at full price. 0 turns a limit off.
+    """
+    if max_context_tokens > 0 and context is not None and context > max_context_tokens:
+        return "context"
+    if fresh_after_idle_minutes > 0 and idle_s is not None and idle_s > fresh_after_idle_minutes * 60:
+        return "idle"
+    return None
 
 
 class AuthError(RuntimeError):
@@ -167,8 +194,24 @@ class SessionStore:
             data[profile] = session_id
         else:
             data.pop(profile, None)
+        self._write(data)
+
+    def _write(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def last_used(self, profile: str) -> float | None:
+        """When the profile's session last finished a turn (time.time()); survives a restart."""
+        value = self.get(profile + "_last_used")
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def touch(self, profile: str, when: float) -> None:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        data[profile + "_last_used"] = when
+        self._write(data)
 
 
 class Brain:
@@ -196,6 +239,8 @@ class Brain:
         self._client: ClaudeSDKClient | None = None
         self._connect_lock = asyncio.Lock()
         self._fresh_next = False
+        self._rolled: str | None = None  # a roll the user has not been told about yet
+        self._now: Callable[[], float] = time.time
         self._cost_seen = 0.0  # SDK total_cost_usd already accounted for on this connection
         self._steps: set[str] = set()  # tool calls the UI has been told about and that are still running
 
@@ -242,6 +287,8 @@ class Brain:
             if self._client is not None:
                 return
             resume = None
+            if self._idle_expired():
+                self._roll("idle")
             if self.cfg.brain.resume_last_session and not self._fresh_next:
                 resume = self.sessions.get(self.profile)
             self._fresh_next = False
@@ -273,6 +320,22 @@ class Brain:
         self.sessions.set(self.profile, None)
         self._fresh_next = True
 
+    def _idle_expired(self) -> bool:
+        last = self.sessions.last_used(self.profile)
+        if last is None or self.sessions.get(self.profile) is None:
+            return False  # nothing to resume, or a session from before idle tracking
+        return roll_reason(None, self._now() - last, 0, self.cfg.brain.fresh_after_idle_minutes) == "idle"
+
+    def _roll(self, reason: str, context: int | None = None) -> None:
+        """Forget the stored session so the next connect starts a fresh one. Nothing is summarised or
+        carried over: CLAUDE.md, memory/ and notes/ in the home folder hold what has to last."""
+        old = self.sessions.get(self.profile)
+        self.sessions.set(self.profile, None)
+        self._fresh_next = True
+        self._rolled = reason
+        self.audit.write("session_rolled", profile=self.profile, reason=reason, old_session=old,
+                         context_tokens=context)
+
     async def interrupt(self) -> None:
         if self._client is not None:
             try:
@@ -287,6 +350,8 @@ class Brain:
                 f"remote mode: {'on' if self.profile == 'remote' else 'off'} | screenshots: {len(turn.shots)}]")
 
     async def run_turn(self, turn: Turn, on_sentence_delta: Callable[[str], None]) -> TurnResult:
+        if self._client is not None and self._idle_expired():
+            await self.close()  # connect() below rolls it
         await self.connect()
         assert self._client is not None
         message = build_user_message(turn, self._header(turn))
@@ -301,6 +366,7 @@ class Brain:
         session_cost: float | None = None
         usage: dict[str, Any] = {}
         models: list[str] = []
+        context: int | None = None  # what the turn's last model call read: the session's real size
         async for msg in self._client.receive_response():
             if isinstance(msg, StreamEvent):
                 if msg.parent_tool_use_id is None:
@@ -310,6 +376,7 @@ class Brain:
             elif isinstance(msg, AssistantMessage):
                 if msg.parent_tool_use_id is not None:
                     continue  # subagent chatter: not shown or spoken
+                context = context_tokens(msg.usage) or context
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
                         texts.append(block.text)
@@ -349,7 +416,12 @@ class Brain:
         result.text = "\n\n".join(texts)
         self.audit.write("turn_done", profile=self.profile, is_error=result.is_error, cost_usd=result.cost_usd,
                          session_cost_usd=session_cost,
-                         usage=usage, models=models, shots=len(turn.shots))
+                         usage=usage, context_tokens=context, models=models, shots=len(turn.shots))
+        self.sessions.touch(self.profile, self._now())
+        if roll_reason(context, None, self.cfg.brain.max_context_tokens, 0):
+            await self.close()
+            self._roll("context", context)
+        result.rolled, self._rolled = self._rolled, None
         return result
 
     # -- policy plumbing -------------------------------------------------

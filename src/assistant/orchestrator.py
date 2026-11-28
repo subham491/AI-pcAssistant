@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any, Callable, Protocol
 
 from .audit import AuditLog
-from .brain import AuthError, Brain, SessionStore, Turn, prepare_auth_env
+from .brain import ROLL_NOTICE, AuthError, Brain, SessionStore, Turn, prepare_auth_env
 from .config import Config, EditMode
 from .desktop import control, win32
 from .desktop.capture import CaptureError, ScreenCapturer, Shot
@@ -237,6 +237,8 @@ class Orchestrator:
             ok = not result.is_error and not result.interrupted
             if result.is_error and not result.interrupted:
                 self._say("That didn't finish cleanly. The details are in the activity log.")
+            if result.rolled:
+                self._say(ROLL_NOTICE)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

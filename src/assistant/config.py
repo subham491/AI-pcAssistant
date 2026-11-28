@@ -41,6 +41,12 @@ class BrainConfig:
     gemini_key_file: str = ""  # a text file holding a Gemini API key; the watchdog asks Gemini why a restart failed
     effort: str | None = None  # low | medium | high | xhigh | max; None = the model's default (high)
     resume_last_session: bool = True
+    # A resumed session only grows and every turn re-reads all of it. When a turn ends with more than this
+    # many tokens in context, the next turn starts in a fresh session. 0 = never.
+    max_context_tokens: int = 150_000
+    # The next turn also starts fresh after this long without one (the prompt cache is cold by then, so a
+    # long session is paid for again in full). 0 = never.
+    fresh_after_idle_minutes: float = 240.0
     max_turns: int = 40
     # Load ~/.claude (user) and <home>/.claude + CLAUDE.md (project).
     setting_sources: list[str] = field(default_factory=lambda: ["user", "project"])

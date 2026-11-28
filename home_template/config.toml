@@ -8,6 +8,8 @@ auth_mode = "subscription"
 # model = "opus"            # leave unset for Claude Code's default; "sonnet" or "haiku" cost less
 # effort = "medium"         # low | medium | high | xhigh | max: how hard it thinks on every turn
 # resume_last_session = true
+# max_context_tokens = 150000      # a turn that ends above this starts the next one in a fresh session; 0 = never
+# fresh_after_idle_minutes = 240   # so does this long without a turn (the cache is cold by then); 0 = never
 
 [ui]
 # name = "Hellbot"                 # shown on the orb's card and tray; what the assistant calls itself

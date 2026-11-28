@@ -49,6 +49,12 @@ def summarize(lines: Iterable[str]) -> dict[str, dict[str, float]]:
             day["tracked"] += 1
             for k in TOKEN_KEYS:
                 day[k] += rec["usage"].get(k) or 0
+        if rec.get("context_tokens"):
+            # The session's real size: what the turn's last model call read. `usage` above sums every
+            # model call inside the turn, so it overstates turns that used many tools.
+            day["sized"] += 1
+            day["context_sum"] += rec["context_tokens"]
+            day["context_max"] = max(day["context_max"], rec["context_tokens"])
     return days
 
 
@@ -64,6 +70,9 @@ def main() -> int:
             ctx = (d["input_tokens"] + d["cache_creation_input_tokens"] + d["cache_read_input_tokens"]) / d["tracked"]
             line += (f"; {d['tracked']:.0f} turns with tokens: context avg {ctx / 1000:.0f}k in, "
                      f"{d['output_tokens'] / d['tracked']:.0f} out, {d['shots']:.0f} screenshots")
+        if d["sized"]:
+            line += (f"; session size avg {d['context_sum'] / d['sized'] / 1000:.0f}k, "
+                     f"max {d['context_max'] / 1000:.0f}k")
         print(line)
     return 0
 
