@@ -9,7 +9,10 @@ so this only needs to be good at *where to stop*, not at perfect labelling.
 Two things keep it from cutting you off mid-sentence: once you are speaking,
 a quieter level still counts as speech (`keep_ratio`, so trailing-off words are
 not read as silence), and `stop_on_silence=False` makes it wait for `finish()`
-(click-to-stop) instead of any pause.
+(click-to-stop) instead of any pause. That lower level never drops below how loud
+the room itself just was (`room`): a TV in the background is quieter than the level
+that starts a capture, but louder than a fading word, and used to hold a capture
+open for as long as it kept talking.
 
 Swap-in point: replace `Endpointer` with a streaming Silero VAD if a noisy
 room still confuses it (see README "Customising").
@@ -53,6 +56,8 @@ class EndpointerConfig:
     min_speech_s: float = 0.25  # ignore clicks/bumps shorter than this
     keep_ratio: float = 1.6  # once speaking, this many times the noise floor still counts as speech
     stop_on_silence: bool = True  # False: only finish() or max_utterance_s ends the capture
+    room_s: float = 10.0  # how far back "how loud the room just was" looks
+    room_margin: float = 1.3  # once speaking, you must be this many times louder than the room was
 
 
 class Endpointer:
@@ -65,6 +70,8 @@ class Endpointer:
         # Sized for preroll_s alone, the confirming frames push all the earlier audio out, and a
         # soft first sound ("h") is lost: Whisper then drops or garbles the first word.
         self._preroll: deque[np.ndarray] = deque(maxlen=max(1, round((cfg.preroll_s + cfg.min_speech_s) / frame_s)))
+        # Levels of the recent frames in which nobody was talking to us. Kept across reset().
+        self.room: deque[float] = deque(maxlen=max(1, round(cfg.room_s / frame_s)))
         self.reset()
 
     def reset(self) -> None:
@@ -82,7 +89,8 @@ class Endpointer:
     def still_speech(self, level: float) -> bool:
         """Lower bar used mid-utterance: soft word endings and quiet speakers stay 'speech'."""
         scale = self.cfg.keep_ratio / self.cfg.ratio
-        return level > max(self.noise * self.cfg.keep_ratio, self.cfg.abs_min_rms * scale)
+        room = max(self.room, default=0.0) * self.cfg.room_margin
+        return level > max(self.noise * self.cfg.keep_ratio, self.cfg.abs_min_rms * scale, room)
 
     def finish(self) -> EndState:
         """The user said "done" (second click / hotkey). Whatever was captured is the utterance."""
@@ -111,6 +119,7 @@ class Endpointer:
                 self._speech_s = 0.0
                 # Learn the noise floor only from non-speech frames.
                 self.noise = 0.95 * self.noise + 0.05 * level
+                self.room.append(level)
                 self._preroll.append(frame)
                 if self._elapsed >= self.cfg.no_speech_timeout_s:
                     self.state = EndState.NO_SPEECH

@@ -38,6 +38,8 @@ class AuthMode(str, Enum):
 class BrainConfig:
     auth_mode: AuthMode = AuthMode.SUBSCRIPTION
     model: str | None = None  # None = Claude Code's default for your plan
+    gemini_key_file: str = ""  # a text file holding a Gemini API key; the watchdog asks Gemini why a restart failed
+    effort: str | None = None  # low | medium | high | xhigh | max; None = the model's default (high)
     resume_last_session: bool = True
     max_turns: int = 40
     # Load ~/.claude (user) and <home>/.claude + CLAUDE.md (project).
@@ -59,6 +61,9 @@ class VoiceConfig:
     # size works ("small.en" is ~6x lighter), as does a Hugging Face repo id or folder of a
     # CTranslate2 Whisper model, e.g. a fine-tune for your accent.
     stt_model: str = "auto"
+    # Conversation mode (wake_phrase only): for this many seconds after a reply ends, speak again without the
+    # wake phrase. Each exchange renews it. 0 = off, the wake phrase is needed every time.
+    follow_up_s: float = 25.0
     stt_beam_size: int = 0  # 0 = auto: 5 on a GPU, 1 on the CPU (faster)
     stt_device: str = "auto"  # auto | cuda | cpu
     stt_compute_type: str = "auto"  # auto picks float16 on CUDA, int8 on CPU
@@ -77,6 +82,12 @@ class VoiceConfig:
     # sapi: substring of a Windows voice name. pocket: a built-in voice name ("javert"), or the
     # full path of a voice file made with `pocket-tts export-voice` (or a .wav to clone).
     tts_voice: str | None = None
+    # Part of the name of a Wi-Fi speaker (UPnP/DLNA, e.g. "JBL") to speak through instead of the PC's
+    # speaker. Pocket engine only; about 3 s slower to start. Falls back to the PC if it does not answer.
+    tts_output: str = ""
+    # A Samsung TV's status page, e.g. "http://192.168.1.7:8001/api/v2/". A soundbar plays one source at a
+    # time, so while this says the TV is on, replies play on the PC and tts_output drops to a third meanwhile.
+    tts_tv_status_url: str = ""
     # Do not listen for the wake word while one of these apps is using the
     # microphone (you are on a call). Substring match, case-insensitive.
     mute_wake_when_mic_used_by: list[str] = field(

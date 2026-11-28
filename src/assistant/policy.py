@@ -73,6 +73,7 @@ SAFE_BUILTINS = {
 DESKTOP_OBSERVE = {desktop_tool(n) for n in ("screenshot", "list_monitors", "list_windows", "ui_tree")}
 DESKTOP_REVERSIBLE = {desktop_tool(n) for n in ("open_url", "show_code")}
 DESKTOP_CONSEQUENTIAL = {desktop_tool(n) for n in ("open_app", "click", "type_text", "press_keys", "click_element")}
+DESKTOP_CAMERA = {desktop_tool("camera")}
 
 # Credentials and system internals. Matched case-insensitively against the
 # path with forward slashes. Reading these is as bad as writing them: the
@@ -280,6 +281,8 @@ class Policy:
             return Decision(Tier.REVERSIBLE, "allow", "Opens or shows something; nothing is changed.")
         if tool_name in DESKTOP_CONSEQUENTIAL:
             return Decision(Tier.CONSEQUENTIAL, "ask", "Controls your mouse/keyboard or launches a program.")
+        if tool_name in DESKTOP_CAMERA:
+            return Decision(Tier.CONSEQUENTIAL, "ask", "Turns on your webcam and takes a photo.")
 
         # 6. Other MCP servers (your connectors: Jira, Drive, ...).
         if tool_name.startswith("mcp__"):

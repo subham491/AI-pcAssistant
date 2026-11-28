@@ -22,7 +22,7 @@ from claude_agent_sdk.types import McpSdkServerConfig
 from ..intents import ScreenTarget, TargetKind, screen_target
 from ..policy import DESKTOP_SERVER
 from ..ui.sink import UiSink
-from . import control, win32
+from . import control, webcam, win32
 from .capture import CaptureError, ScreenCapturer, Shot
 
 log = logging.getLogger(__name__)
@@ -109,6 +109,17 @@ def build_desktop_server(capturer: ScreenCapturer, ui: UiSink, remote: bool = Fa
     async def ui_tree(args: dict[str, Any]) -> Result:
         return _text(await asyncio.to_thread(control.ui_tree, int(args.get("max_depth") or 4)))
 
+    @tool("camera",
+          "Take one photo with the PC's webcam, to see the user or the room. `camera` is part of a camera's name; "
+          "leave it out for the default camera. Takes a few seconds. Nothing is saved.",
+          {"type": "object", "properties": {"camera": {"type": "string"}}})
+    @_guard
+    async def camera(args: dict[str, Any]) -> Result:
+        jpeg, name = await asyncio.to_thread(webcam.grab, str(args.get("camera") or ""))
+        ui.activity(f"Camera: {name}")
+        return {"content": [{"type": "text", "text": f"Photo from {name}"},
+                            {"type": "image", "data": base64.b64encode(jpeg).decode(), "mimeType": "image/jpeg"}]}
+
     @tool("show_code",
           "Hand code, a diff or any long text to the user as a pill beside the orb, with Copy and Open-in-editor "
           "buttons. It is not read aloud. Use this in suggest-only and remote mode instead of editing files.",
@@ -181,7 +192,7 @@ def build_desktop_server(capturer: ScreenCapturer, ui: UiSink, remote: bool = Fa
 
     look = [screenshot, list_monitors, list_windows, show_code]
     hands = [ui_tree, open_url, open_app, click, click_element, type_text, press_keys]
-    return create_sdk_mcp_server(DESKTOP_SERVER, "0.1.0", look if remote else look + hands)
+    return create_sdk_mcp_server(DESKTOP_SERVER, "0.1.0", look if remote else look + [camera] + hands)
 
 
 def describe_input(tool_input: dict[str, Any]) -> str:

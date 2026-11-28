@@ -45,6 +45,7 @@ from .desktop.capture import Shot
 from .diffs import UndoJournal, preview_edit
 from .policy import FILE_EDIT_TOOLS, Decision, Policy
 from .steps import describe
+from .usage import turn_cost
 from .ui.sink import ApprovalRequest, UiSink
 
 log = logging.getLogger(__name__)
@@ -191,6 +192,7 @@ class Brain:
         self._client: ClaudeSDKClient | None = None
         self._connect_lock = asyncio.Lock()
         self._fresh_next = False
+        self._cost_seen = 0.0  # SDK total_cost_usd already accounted for on this connection
         self._steps: set[str] = set()  # tool calls the UI has been told about and that are still running
 
     # -- options ---------------------------------------------------------
@@ -214,6 +216,7 @@ class Brain:
             max_buffer_size=16 * 1024 * 1024,
             max_turns=self.cfg.brain.max_turns,
             model=self.cfg.brain.model,
+            effort=self.cfg.brain.effort,  # type: ignore[arg-type]
             resume=resume,
             client_app="pc-assistant/0.1",
         )
@@ -244,6 +247,7 @@ class Brain:
                 client = ClaudeSDKClient(self._options(None))
                 await client.connect()
             self._client = client
+            self._cost_seen = 0.0  # total_cost_usd restarts with every CLI process, resumed or not
             self.audit.write("session_connected", profile=self.profile, resumed=resume)
 
     async def close(self) -> None:
@@ -284,6 +288,9 @@ class Brain:
         await self._client.query(one())
         texts: list[str] = []
         result = TurnResult(text="")
+        session_cost: float | None = None
+        usage: dict[str, Any] = {}
+        models: list[str] = []
         async for msg in self._client.receive_response():
             if isinstance(msg, StreamEvent):
                 if msg.parent_tool_use_id is None:
@@ -306,13 +313,21 @@ class Brain:
                         self.sessions.set(self.profile, sid)
             elif isinstance(msg, ResultMessage):
                 self.sessions.set(self.profile, msg.session_id)
+                usage, models = msg.usage or {}, list(msg.model_usage or {})
                 result = TurnResult(
                     text="\n\n".join(texts),
                     is_error=msg.is_error,
-                    cost_usd=msg.total_cost_usd,
+                    cost_usd=None,
                     interrupted=(msg.subtype == "error_during_execution"),
                 )
-        self.audit.write("turn_done", profile=self.profile, is_error=result.is_error, cost_usd=result.cost_usd)
+                session_cost = msg.total_cost_usd
+                if session_cost is not None:
+                    # total_cost_usd is a running total for the connection, not this turn's cost.
+                    result.cost_usd = turn_cost(session_cost, self._cost_seen)
+                    self._cost_seen = session_cost
+        self.audit.write("turn_done", profile=self.profile, is_error=result.is_error, cost_usd=result.cost_usd,
+                         session_cost_usd=session_cost,
+                         usage=usage, models=models, shots=len(turn.shots))
         return result
 
     # -- policy plumbing -------------------------------------------------

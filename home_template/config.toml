@@ -5,7 +5,8 @@
 # "subscription" = your Claude Pro/Max login (run `pc-assistant login` once).
 # "api_key"      = uses the ANTHROPIC_API_KEY environment variable instead.
 auth_mode = "subscription"
-# model = "opus"            # leave unset for Claude Code's default
+# model = "opus"            # leave unset for Claude Code's default; "sonnet" or "haiku" cost less
+# effort = "medium"         # low | medium | high | xhigh | max: how hard it thinks on every turn
 # resume_last_session = true
 
 [ui]
@@ -28,6 +29,9 @@ auth_mode = "subscription"
 # Words Whisper should expect: project names, jargon. Biggest accuracy win.
 vocabulary = ["Claude", "Jira", "Teams", "GitHub", "VS Code"]
 # tts_enabled = true
+# tts_output = "JBL"               # speak through a Wi-Fi speaker (part of its name) instead of the PC; pocket engine only
+# tts_tv_status_url = "http://192.168.1.7:8001/api/v2/"   # Samsung TV on that speaker: while it is on, replies
+#                                  # play on the PC and the speaker drops to a third, instead of cutting the TV's sound
 # tts_voice = "Zira"               # part of a Windows voice name
 # tts_engine = "pocket"            # natural voice with Pocket TTS (pip install -e ".[natural-voice]"); then
 #                                  # tts_voice = a built-in name like "javert", or the full path of a voice file

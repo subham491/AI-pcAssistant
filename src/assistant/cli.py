@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import AuthMode, Config, ConfigError, default_home, load_config
+from .ui.sink import NullSink
 
 TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "home_template"
 
@@ -153,7 +154,10 @@ def doctor(cfg: Config) -> int:
 # ---------------------------------------------------------------------------
 
 
-class _PrintSink:
+class _PrintSink(NullSink):
+    """Prints what the UI would show. Inherits NullSink so a new UiSink method is a silent no-op here
+    instead of an AttributeError mid-turn (tests/test_sinks.py keeps every sink complete)."""
+
     def status(self, state: str, text: str) -> None:
         if state in ("error", "waiting"):
             print(f"  [{state}] {text}")
@@ -165,6 +169,13 @@ class _PrintSink:
 
     def activity(self, text: str) -> None:
         print(f"  · {text}")
+
+    # Tool steps are already printed through activity() ("→ Read app.py", "✗ Read failed: ...").
+    def step_started(self, step) -> None: ...  # type: ignore[no-untyped-def]
+
+    def step_finished(self, step_id: str, ok: bool, note: str) -> None: ...
+
+    def turn_finished(self, ok: bool) -> None: ...
 
     def show_code(self, title: str, code: str, language: str) -> None:
         print(f"\n--- {title} ---\n{code}\n---\n")

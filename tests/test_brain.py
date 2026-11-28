@@ -102,6 +102,12 @@ def test_remote_profile_has_no_builtin_tools(cfg):
     assert opts.cwd == str(cfg.home)
 
 
+def test_model_and_effort_from_config_reach_the_session(cfg):
+    cfg.brain.model, cfg.brain.effort = "sonnet", "medium"
+    opts = make_brain(cfg)[0]._options(None)
+    assert (opts.model, opts.effort) == ("sonnet", "medium")
+
+
 class StepSink(NullSink):
     def __init__(self):
         self.events = []

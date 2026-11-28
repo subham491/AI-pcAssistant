@@ -116,3 +116,20 @@ def test_reading_time_grows_with_length_and_is_capped():
 
     assert reading_time("Done.") < reading_time("I found two hundred old updates.") <= 7.0
     assert reading_time("word " * 200) == 7.0
+
+
+def test_pocket_voice_falls_back_to_the_pc_speaker_when_the_wifi_one_does_not_answer():
+    from assistant.voice.netspeaker import NetSpeakerError
+
+    class DeadSpeaker(FakeStream):
+        def write(self, data):
+            raise NetSpeakerError("the speaker refused Play")
+
+    local, rested = FakeStream(), []
+    voice = PocketVoice(FakeModel(), object(), DeadSpeaker, rested.append, lambda: local)
+    voice.speak("hello", threading.Event())
+    assert len(local.written) == 4  # the sentence was not lost
+    voice.speak("again", threading.Event())  # and it stays on the PC: no second failed attempt
+    assert len(local.written) == 8
+    voice.rest(threading.Event())
+    assert rested == []  # the dead speaker's hook is gone too

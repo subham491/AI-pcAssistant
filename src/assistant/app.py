@@ -141,7 +141,11 @@ def run_gui(cfg: Config) -> int:
 
     hotkeys = _start_hotkeys(cfg, talk, stop_all, bridge.toggle.emit)
 
+    (cfg.state_dir / "quit.flag").unlink(missing_ok=True)
+
     def quit_app() -> None:
+        cfg.state_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.state_dir / "quit.flag").touch()  # tells the watchdog this exit was on purpose
         if hotkeys is not None:
             hotkeys.stop()
         if listener is not None:
@@ -174,6 +178,9 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
     from .voice.listener import CallDetector, Listener, beep
     from .voice.stt import SpeechToText
 
+    from .voice.conversation import Conversation
+
+    conv = Conversation(cfg.voice.follow_up_s)
     stt = SpeechToText(cfg.voice, name=cfg.ui.name, on_slow=sink.activity)
 
     def warm() -> None:  # first run downloads the model; say so instead of looking stuck
@@ -194,16 +201,19 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
             log.exception("transcription failed")
             sink.status("error", f"Speech-to-text failed: {exc}")
             return
-        if needs_wake:  # room speech: ours only if it starts or ends with the wake phrase
+        if needs_wake:  # room speech: ours only if it has the wake phrase, or a conversation is open
             rest = strip_wake_phrase(text, cfg.voice.wake_phrase)
             if rest is None:
-                return
+                if not text or not conv.is_open():
+                    return
+                rest = text  # a follow-up: no wake phrase needed
             if not rest:
                 listener.trigger()  # just the wake phrase: beep and take the command
                 return
             beep(660, 70)  # heard you
             text = rest
         if text:
+            conv.touch()
             orch.submit_text_threadsafe(text, "voice")
         else:
             sink.status("idle", "Didn't catch that")
@@ -214,7 +224,7 @@ def _start_voice(cfg: Config, orch: Orchestrator, sink, speaker, pool: ThreadPoo
         cfg.voice,
         on_utterance=lambda audio, needs_wake: pool.submit(transcribe_and_submit, audio, needs_wake),
         on_state=lambda s: sink.status(s, states.get(s, s)),
-        is_speaking=lambda: speaker.speaking,
+        is_speaking=lambda: conv.speaking(speaker.speaking),
         wake_muted=CallDetector(cfg.voice.mute_wake_when_mic_used_by),
         on_level=sink.sig_level.emit,
     )

@@ -130,6 +130,15 @@ focused). Say which screen if you mean something else:
 Claude can also take screenshots itself (`mcp__desktop__screenshot`). Password managers
 (`redact_processes` in config) are blacked out before anything is sent.
 
+`tts_output = "JBL"` in config speaks through a Wi-Fi speaker (any UPnP/DLNA renderer, matched by part of its
+name) instead of the PC: one live stream per reply, about 3 s slower to start, and it falls back to the PC's
+speaker if the Wi-Fi one does not answer. A soundbar plays one source at a time, so set `tts_tv_status_url` to
+your Samsung TV's status page and replies made while the TV is on play on the PC instead, with the soundbar
+turned down to a third until the reply ends.
+
+Ask "can you see me?" and Claude takes one photo with your webcam (`mcp__desktop__camera`). The camera is
+on for a few seconds, nothing is saved, and with guardrails on it asks first.
+
 ### Voice commands handled locally (never sent to Claude)
 
 | Say | Effect |
@@ -157,7 +166,7 @@ Claude can also take screenshots itself (`mcp__desktop__screenshot`). Password m
 |---|---|---|
 | T0 observe | read files, search, screenshots, connector reads (`get_`, `list_`, `search_`...) | runs, logged |
 | T1 reversible | file edits (per edit mode), allow-listed commands (`git status`, `ls`...), open a URL | runs, logged |
-| T2 consequential | any other shell command, clicks/typing, launching apps, connector writes, unknown tools | **approval pill** |
+| T2 consequential | any other shell command, clicks/typing, launching apps, a webcam photo, connector writes, unknown tools | **approval pill** |
 | T3 forbidden | credential files (.ssh, browser passwords, .kdbx...), registry, disk tools, `sudo`/runas, download-and-run pipes | blocked, never asked |
 
 Every decision and result goes to `logs/audit.jsonl`. The hard denials run in a PreToolUse

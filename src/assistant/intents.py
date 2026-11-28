@@ -53,7 +53,8 @@ _APPROVE = {"apply", "apply it", "apply that", "approve", "approved", "confirm",
 _REJECT = {"reject", "reject it", "no", "nope", "deny", "denied", "don't", "do not", "skip", "skip it", "discard",
            "no thanks"}
 _UNDO = {"undo", "undo that", "undo it", "revert that", "undo the last edit", "revert the last edit"}
-_NEW = {"new conversation", "start over", "new session", "fresh start", "reset conversation"}
+_NEW = {"new conversation", "start over", "new session", "fresh start", "reset conversation",
+        "new connection", "a new connection", "a new conversation"}  # the last ones: what Whisper heard for it
 _REMOTE_ON = {"remote mode", "switch to remote mode", "remote mode on", "enter remote mode", "go remote"}
 _REMOTE_OFF = {"local mode", "exit remote mode", "leave remote mode", "remote mode off", "switch to local mode"}
 

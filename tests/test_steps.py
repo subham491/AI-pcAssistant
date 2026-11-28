@@ -16,6 +16,7 @@ from assistant.steps import DONE_LINGER_S, FADE_S, FAIL_LINGER_S, MAX_PUFFS, Ste
     ("Task", {"description": "Review the diff", "prompt": "..."}, "ask", "Review the diff"),
     ("TodoWrite", {"todos": [{}, {}, {}]}, "plan", "3 steps"),
     ("mcp__desktop__screenshot", {}, "screen", "your screen"),
+    ("mcp__desktop__camera", {}, "screen", "through the camera"),
     ("mcp__desktop__press_keys", {"keys": "ctrl+s"}, "control", "press keys: ctrl+s"),
     ("mcp__github__list_issues", {"repo": "a/b"}, "search", "Github: a/b"),
     ("mcp__claude_ai_Gmail__search_threads", {"query": "category:updates older_than:1y"}, "search",

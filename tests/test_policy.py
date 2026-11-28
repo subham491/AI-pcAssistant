@@ -91,7 +91,7 @@ def test_remote_mode_blocks_local_tools(policy, cfg):
 def test_desktop_tiers(policy):
     assert policy.classify(desktop_tool("screenshot"), {}).tier is Tier.OBSERVE
     assert policy.classify(desktop_tool("open_url"), {"url": "https://x"}).action == "allow"
-    for name in ("click", "type_text", "press_keys", "open_app", "click_element"):
+    for name in ("click", "type_text", "press_keys", "open_app", "click_element", "camera"):
         assert policy.classify(desktop_tool(name), {}).action == "ask"
 
 

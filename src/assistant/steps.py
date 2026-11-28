@@ -41,7 +41,7 @@ _KINDS = {
 }
 _DESKTOP_KINDS = {
     "screenshot": "screen", "list_monitors": "screen", "list_windows": "screen", "ui_tree": "screen",
-    "open_url": "web", "show_code": "edit",
+    "camera": "screen", "open_url": "web", "show_code": "edit",
 }
 MAX_LABEL = 48
 
@@ -111,7 +111,7 @@ def describe(step_id: str, tool_name: str, tool_input: dict[str, Any] | None) ->
         label, detail = (f"{len(todos)} steps" if todos else "the steps"), ""
     elif kind == "screen":
         label, detail = {"screenshot": "your screen", "ui_tree": "the window", "list_windows": "open windows",
-                         "list_monitors": "your monitors"}.get(base, base.replace("_", " ")), ""
+                         "list_monitors": "your monitors", "camera": "through the camera"}.get(base, base.replace("_", " ")), ""
     else:
         first = next((v for v in inp.values() if isinstance(v, (str, int, float)) and str(v).strip()), "")
         label, detail = base.replace("_", " "), _short(first, 200)

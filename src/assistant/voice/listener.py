@@ -157,7 +157,8 @@ class Listener:
                 if woke:
                     self._trigger.clear()
                     self._drain()  # drop audio queued before the wake
-                    manual_ep.noise = ambient_ep.noise  # what the room sounded like until now
+                    # what the room sounded like until now
+                    manual_ep.noise, manual_ep.room = ambient_ep.noise, ambient_ep.room
                     endpointer = manual_ep
                     endpointer.reset()
                     capturing, ambient = True, False

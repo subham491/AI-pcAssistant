@@ -20,6 +20,7 @@ from typing import Any, Callable
 import numpy as np
 
 from ..config import VoiceConfig
+from .netspeaker import NetSpeaker, NetSpeakerError
 
 log = logging.getLogger(__name__)
 
@@ -28,13 +29,17 @@ _SVSF_PURGE = 2
 
 
 class PocketVoice:
-    """One Pocket TTS voice, played on whatever is the Windows default speaker right now."""
+    """One Pocket TTS voice, played on the Windows default speaker or on a Wi-Fi speaker."""
 
-    def __init__(self, model: Any, state: Any, open_stream: Callable[[], Any]) -> None:
+    def __init__(self, model: Any, state: Any, open_stream: Callable[[], Any],
+                 rest: Callable[[threading.Event], None] = lambda _stop: None,
+                 fallback: Callable[[], Any] | None = None) -> None:
         self.model, self.state, self.open_stream = model, state, open_stream
+        self.rest = rest  # called when a reply is over (a Wi-Fi speaker is still playing its buffer)
+        self.fallback = fallback  # the PC's own speaker, for when the Wi-Fi one does not answer
 
     @classmethod
-    def load(cls, voice: str | None) -> PocketVoice:
+    def load(cls, voice: str | None, output: str = "", tv_status_url: str = "") -> PocketVoice:
         import sounddevice as sd
         import torch
         from pocket_tts import TTSModel
@@ -48,10 +53,30 @@ class PocketVoice:
         # the speaker that was default at launch. The Sound Mapper resolves the default each open.
         mapper = next((i for i, d in enumerate(sd.query_devices())
                        if d["name"] == "Microsoft Sound Mapper - Output"), None)
-        return cls(model, state, lambda: sd.OutputStream(samplerate=model.sample_rate, channels=1,
-                                                         dtype="float32", device=mapper))
+        def local() -> Any:
+            return sd.OutputStream(samplerate=model.sample_rate, channels=1, dtype="float32", device=mapper)
+
+        if output:
+            try:
+                net = NetSpeaker(output, model.sample_rate, tv_status_url)
+                log.info("speaking through %s", net.name)
+                return cls(model, state, lambda: local() if net.shared() else net, net.rest, local)
+            except NetSpeakerError as exc:
+                log.warning("%s; speaking through the PC instead", exc)
+        return cls(model, state, local)
 
     def speak(self, text: str, stop: threading.Event) -> None:
+        try:
+            self._play(text, stop)
+        except NetSpeakerError as exc:
+            if self.fallback is None:
+                raise
+            # The Wi-Fi speaker is off or unreachable: say it on the PC, and stay there until a restart.
+            log.warning("%s; speaking through the PC instead", exc)
+            self.open_stream, self.rest, self.fallback = self.fallback, (lambda _stop: None), None
+            self._play(text, stop)
+
+    def _play(self, text: str, stop: threading.Event) -> None:
         # A fresh stream per sentence follows the Windows default speaker if you switch it.
         with self.open_stream() as stream:
             for chunk in self.model.generate_audio_stream(self.state, text, stop=stop):
@@ -137,13 +162,15 @@ class Speaker:
             except Exception:  # noqa: BLE001 - never let TTS kill the app
                 log.exception("speech failed")
             finally:
+                if pocket is not None and self._q.empty():
+                    pocket.rest(self._stop)
                 self._speaking.clear()
                 if self._q.empty():
                     self._notify(None)
 
     def _init_pocket(self) -> PocketVoice | None:
         try:
-            return PocketVoice.load(self.cfg.tts_voice)
+            return PocketVoice.load(self.cfg.tts_voice, self.cfg.tts_output, self.cfg.tts_tv_status_url)
         except Exception:  # noqa: BLE001
             log.exception("Pocket TTS unavailable; falling back to the Windows voice")
             self.cfg = dataclasses.replace(self.cfg, tts_voice=None)  # a Pocket voice is not a SAPI name

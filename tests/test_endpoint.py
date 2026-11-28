@@ -79,3 +79,16 @@ def test_finish_before_any_speech_reports_no_speech():
     ep = Endpointer(EndpointerConfig())
     ep.feed(frame(50))
     assert ep.finish() is EndState.NO_SPEECH
+
+
+def test_a_tv_in_the_background_does_not_hold_the_capture_open():
+    # Measured: the TV reaches the mic at up to ~250, under the level that starts a capture (300)
+    # but over the old "still speaking" level (160). One "Hellbot" then stayed open for 21 s.
+    ep = Endpointer(EndpointerConfig(end_silence_s=0.4))
+    for i in range(40):
+        assert ep.feed(frame(250 if i % 4 == 0 else 60)) is EndState.WAITING  # TV chatter alone starts nothing
+    for _ in range(8):
+        ep.feed(frame(3000))  # you
+    assert ep.state is EndState.SPEAKING
+    states = [ep.feed(frame(250 if i % 4 == 0 else 60)) for i in range(8)]  # you stop, the TV carries on
+    assert states[-1] is EndState.DONE
