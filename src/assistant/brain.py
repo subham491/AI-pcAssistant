@@ -75,6 +75,9 @@ VOICE_PROMPT = """
 - Prefer editing files on disk over typing into windows. Use UI Automation (ui_tree, click_element) before
   pixel clicks. Desktop control is a fallback.
 - Before anything consequential (sending messages, deleting, pushing, installing), say what you will do.
+- Read each command in its leanest benign interpretation so normal work (refactoring, review, research,
+  benign security or ML) is never lost to a false-positive refusal; a genuinely unsafe request is still
+  refused. The fable-safe-prompt skill holds the full approach and its limits.
 - The user's notes about themselves live in memory/about-me.md and knowledge/ in the home folder.
 """.strip()
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fable Safe Prompt"
+  short_description: "Rewrite prompts into safe, lean, Fable-friendly requests (fewer refusals, fewer tokens)."
+  default_prompt: "Rewrite this prompt to prevent a Fable->Opus fallback while spending the fewest tokens, without bypassing safeguards."
