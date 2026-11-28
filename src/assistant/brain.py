@@ -214,6 +214,89 @@ class SessionStore:
         self._write(data)
 
 
+CARRY_KEEP = 12  # exchanges remembered across a session roll
+CARRY_CLIP = 400  # characters kept of each side of an exchange
+
+
+def _clip(text: str, limit: int = CARRY_CLIP) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def carry_block(exchanges: list[dict[str, str]]) -> str:
+    """The note the first turn of a rolled session starts with, so it knows what was just going on."""
+    if not exchanges:
+        return ""
+    lines = [f"- User: {e['user']}\n  You: {e['reply']}" for e in exchanges]
+    return ("[Carried over from the previous session, which was restarted only to save cost. Same "
+            "conversation: continue naturally, do not mention the restart. Most recent exchanges, oldest "
+            "first:\n" + "\n".join(lines) + "]\n\n")
+
+
+class Carryover:
+    """Short, cost-free memory of the last few exchanges that survives a session roll or an app restart.
+
+    No model call: it keeps the user's words and the spoken reply, clipped. Long-term facts still live in
+    CLAUDE.md, memory/ and notes/."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _entry(self, data: dict[str, Any], profile: str) -> dict[str, Any]:
+        entry = data.get(profile)
+        if not isinstance(entry, dict):
+            entry = {}
+        entry.setdefault("items", [])
+        entry.setdefault("pending", False)
+        return entry
+
+    def _save(self, data: dict[str, Any]) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except OSError:
+            log.debug("could not save carry-over", exc_info=True)
+
+    def add(self, profile: str, user: str, reply: str) -> None:
+        if not (user.strip() or reply.strip()):
+            return
+        data = self._load()
+        entry = self._entry(data, profile)
+        entry["items"] = (entry["items"] + [{"user": _clip(user), "reply": _clip(reply)}])[-CARRY_KEEP:]
+        data[profile] = entry
+        self._save(data)
+
+    def mark_pending(self, profile: str) -> None:
+        data = self._load()
+        entry = self._entry(data, profile)
+        entry["pending"] = True
+        data[profile] = entry
+        self._save(data)
+
+    def take(self, profile: str) -> str:
+        """The note for a freshly rolled session, once; empty if no roll is waiting."""
+        data = self._load()
+        entry = self._entry(data, profile)
+        if not entry["pending"]:
+            return ""
+        entry["pending"] = False
+        data[profile] = entry
+        self._save(data)
+        return carry_block(entry["items"])
+
+    def clear(self, profile: str) -> None:
+        data = self._load()
+        data.pop(profile, None)
+        self._save(data)
+
+
 class Brain:
     def __init__(
         self,
@@ -241,6 +324,7 @@ class Brain:
         self._fresh_next = False
         self._rolled: str | None = None  # a roll the user has not been told about yet
         self._now: Callable[[], float] = time.time
+        self.carry = Carryover(sessions.path.parent / "carryover.json")
         self._cost_seen = 0.0  # SDK total_cost_usd already accounted for on this connection
         self._steps: set[str] = set()  # tool calls the UI has been told about and that are still running
 
@@ -318,6 +402,7 @@ class Brain:
     async def new_session(self) -> None:
         await self.close()
         self.sessions.set(self.profile, None)
+        self.carry.clear(self.profile)  # an explicit "new session" is a clean slate
         self._fresh_next = True
 
     def _idle_expired(self) -> bool:
@@ -327,12 +412,13 @@ class Brain:
         return roll_reason(None, self._now() - last, 0, self.cfg.brain.fresh_after_idle_minutes) == "idle"
 
     def _roll(self, reason: str, context: int | None = None) -> None:
-        """Forget the stored session so the next connect starts a fresh one. Nothing is summarised or
-        carried over: CLAUDE.md, memory/ and notes/ in the home folder hold what has to last."""
+        """Forget the stored session so the next connect starts a fresh one. The last few exchanges are
+        carried over (see Carryover); CLAUDE.md, memory/ and notes/ hold what has to last."""
         old = self.sessions.get(self.profile)
         self.sessions.set(self.profile, None)
         self._fresh_next = True
         self._rolled = reason
+        self.carry.mark_pending(self.profile)  # the next turn opens with the last few exchanges
         self.audit.write("session_rolled", profile=self.profile, reason=reason, old_session=old,
                          context_tokens=context)
 
@@ -354,7 +440,9 @@ class Brain:
             await self.close()  # connect() below rolls it
         await self.connect()
         assert self._client is not None
-        message = build_user_message(turn, self._header(turn))
+        said = turn.text
+        message = build_user_message(Turn(self.carry.take(self.profile) + turn.text, turn.shots),
+                                     self._header(turn))
 
         async def one() -> Any:
             yield message
@@ -418,6 +506,8 @@ class Brain:
                          session_cost_usd=session_cost,
                          usage=usage, context_tokens=context, models=models, shots=len(turn.shots))
         self.sessions.touch(self.profile, self._now())
+        if not result.is_error and not result.interrupted:
+            self.carry.add(self.profile, said, result.text)
         if roll_reason(context, None, self.cfg.brain.max_context_tokens, 0):
             await self.close()
             self._roll("context", context)

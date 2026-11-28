@@ -209,3 +209,31 @@ def test_roll_clears_session_and_audits(cfg):
     assert brain._fresh_next is True and brain._rolled == "context"
     log_text = (cfg.logs_dir / "audit.jsonl").read_text()
     assert '"session_rolled"' in log_text and '"old-sess"' in log_text and "170000" in log_text
+
+
+def test_carryover_survives_a_roll_and_is_taken_once(cfg):
+    from assistant.brain import CARRY_KEEP, carry_block
+
+    brain, _, _ = make_brain(cfg)
+    for i in range(CARRY_KEEP + 3):
+        brain.carry.add("local", f"question {i}", f"answer {i}")
+    assert brain.carry.take("local") == ""  # no roll yet: nothing to inject
+    brain._roll("context", 170_000)
+    note = brain.carry.take("local")
+    assert "question 14" in note and "answer 14" in note
+    assert "question 2" not in note  # only the last CARRY_KEEP exchanges are kept
+    assert brain.carry.take("local") == ""  # injected once
+    assert carry_block([]) == ""
+
+
+def test_carryover_clips_long_text_and_new_session_clears_it(cfg):
+    import asyncio
+
+    brain, _, _ = make_brain(cfg)
+    brain.carry.add("local", "x" * 5000, "ok")
+    brain._roll("idle")
+    assert len(brain.carry.take("local")) < 1500
+    brain.carry.add("local", "a", "b")
+    brain._roll("idle")
+    asyncio.run(brain.new_session())
+    assert brain.carry.take("local") == ""
