@@ -155,6 +155,7 @@ class ScreenCapturer:
     def __init__(self, cfg: CaptureConfig, save_dir: Path | None = None) -> None:
         self.cfg = cfg
         self.save_dir = save_dir
+        self.remote = False  # set by the orchestrator with remote mode: remote screens keep more detail
         self._shots: OrderedDict[str, Shot] = OrderedDict()
         self._ids = itertools.count(1)
         self._lock = threading.Lock()
@@ -213,7 +214,10 @@ class ScreenCapturer:
                 draw.rectangle([rect.left, rect.top, rect.right, rect.bottom], fill="black")
                 draw.text((rect.left + 8, rect.top + 8), f"[hidden: {proc}]", fill="white")
 
-        scale = fit_scale(img.width, img.height, self.cfg.max_long_edge)
+        # PNG on purpose: the model bills by pixels, not bytes, so JPEG would blur text and save no tokens.
+        # `scale` is stored on the Shot; Shot.to_screen (used by control.click) undoes exactly this resize.
+        cap = self.cfg.remote_max_long_edge if self.remote else self.cfg.max_long_edge
+        scale = fit_scale(img.width, img.height, cap)
         if scale > 1.0:
             img = img.resize((round(img.width / scale), round(img.height / scale)), Image.LANCZOS)
 

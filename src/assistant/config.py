@@ -114,7 +114,11 @@ class HotkeyConfig:
 
 @dataclass
 class CaptureConfig:
-    max_long_edge: int = 1568  # downscale before sending to the model
+    # Longest side of a screenshot sent to the model; larger grabs are downscaled. An image costs about
+    # width*height/750 tokens on every later turn of the session, so this is the main cost knob.
+    max_long_edge: int = 1280
+    # The same cap while remote mode is on: text on a remote screen is all there is to go on, so keep more detail.
+    remote_max_long_edge: int = 1568
     # Index into the monitor list (1-based, as Windows Display Settings shows),
     # used for "main screen". 0 = Windows primary monitor.
     main_monitor: int = 0

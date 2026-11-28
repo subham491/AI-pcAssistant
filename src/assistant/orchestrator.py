@@ -366,6 +366,7 @@ class Orchestrator:
 
     def _set_remote(self, on: bool, manual: bool, speak: bool) -> None:
         self.policy.remote_mode = on
+        self.capturer.remote = on  # remote screens are captured at the higher remote_max_long_edge
         self._remote_manual = manual and on
         self.ui.modes(self.policy.edit_mode.value, on)
         self.audit.write("remote_mode", on=on, manual=manual)

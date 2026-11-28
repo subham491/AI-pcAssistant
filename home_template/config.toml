@@ -43,6 +43,8 @@ vocabulary = ["Claude", "Jira", "Teams", "GitHub", "VS Code"]
 # toggle_overlay = "<ctrl>+<alt>+o"   # opens the box to type instead of talking
 
 [capture]
+# max_long_edge = 1280             # longest side of a screenshot in pixels; raise (up to 1568) if small text is misread
+# remote_max_long_edge = 1568      # the same cap while remote mode is on (reading a remote screen needs more detail)
 # main_monitor = 0                 # 0 = Windows primary; or 1, 2 as numbered by `pc-assistant doctor`
 # save_screenshots = false
 # redact_processes = ["KeePassXC.exe", "1Password.exe", "Bitwarden.exe"]
