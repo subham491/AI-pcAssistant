@@ -58,6 +58,23 @@ def summarize(lines: Iterable[str]) -> dict[str, dict[str, float]]:
     return days
 
 
+def rung_counts(lines: Iterable[str]) -> dict[str, dict[str, int]]:
+    """Per-day tally of how many turns each rung handled, from the "routed" audit events. The
+    Treasurer uses it for its daily per-rung line (steward / haiku / sonnet / opus / fable)."""
+    days: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for line in lines:
+        if '"routed"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("event") != "routed":
+            continue
+        days[rec["ts"][:10]][str(rec.get("rung") or "?")] += 1
+    return days
+
+
 def main() -> int:
     from .config import load_config
 

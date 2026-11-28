@@ -72,6 +72,33 @@ class BrainConfig:
 
 
 @dataclass
+class LadderConfig:
+    # Climb a rung on doubt (a hedged/low-confidence reply, a tool failure, a risky-work retry).
+    # False = always run the job's chosen rung, never escalate.
+    escalate: bool = True
+    # The ladder never climbs above this rung, whatever the doubt. One of haiku|sonnet|opus|fable.
+    max_rung: str = "fable"
+    # Job type -> the model a FIRST attempt uses. "default" means [brain].model, so an empty/default
+    # table keeps today's behaviour (everything on the configured model; the ladder only escalates).
+    # Known job types: simple, code, risky, action, screen, general. Values: a rung
+    # (haiku|sonnet|opus|fable) or "default". Risky work still starts one rung up and is floored at
+    # Sonnet; see ladder.py.
+    jobs: dict[str, str] = field(
+        default_factory=lambda: {j: "default" for j in ("simple", "code", "risky", "action", "screen", "general")}
+    )
+
+
+@dataclass
+class TreasurerConfig:
+    # Spend caps in US dollars (the audit log's per-turn cost, the SDK's estimate at API prices).
+    # 0 = off (no cap, no downgrade, no warning) — the default, so nothing changes until you opt in.
+    daily_cap_usd: float = 0.0
+    weekly_cap_usd: float = 0.0
+    warn_at: float = 0.8  # fraction of a cap at which to warn once by voice
+    downgrade_at: float = 0.9  # fraction at which to start capping the ladder lower (never below Sonnet for code/risky)
+
+
+@dataclass
 class VoiceConfig:
     enabled: bool = True
     # Off by default: the mic is only read after you click the orb or press the talk hotkey.
@@ -218,6 +245,8 @@ class RemoteConfig:
 class Config:
     home: Path
     brain: BrainConfig = field(default_factory=BrainConfig)
+    ladder: LadderConfig = field(default_factory=LadderConfig)
+    treasurer: TreasurerConfig = field(default_factory=TreasurerConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
     ui: UiConfig = field(default_factory=UiConfig)
@@ -296,6 +325,8 @@ def default_home() -> Path:
 
 _SECTIONS = {
     "brain": BrainConfig,
+    "ladder": LadderConfig,
+    "treasurer": TreasurerConfig,
     "voice": VoiceConfig,
     "hotkeys": HotkeyConfig,
     "ui": UiConfig,
@@ -348,4 +379,27 @@ def load_config(home: Path | None = None) -> Config:
             setattr(cfg, name, _coerce(cls, name, data[name]))
     if cfg.ui.corner not in CORNERS:
         raise ConfigError(f"[ui].corner: {cfg.ui.corner!r} is not one of {', '.join(CORNERS)}")
+    _validate_ladder(cfg.ladder)
     return cfg
+
+
+# Kept as literals (not an import of ladder.py) so config.py has no import-time dependency on it.
+_RUNGS = ("haiku", "sonnet", "opus", "fable")
+_JOBS = ("simple", "code", "risky", "action", "screen", "general")
+
+
+def _validate_ladder(ladder: LadderConfig) -> None:
+    """A typo in the job table or a bad rung name is rejected loudly, like every other unknown key."""
+    if ladder.max_rung not in _RUNGS:
+        raise ConfigError(f"[ladder].max_rung: {ladder.max_rung!r} is not one of {', '.join(_RUNGS)}")
+    if not isinstance(ladder.jobs, dict):
+        raise ConfigError("[ladder].jobs must be a table of job = \"model\"")
+    bad_jobs = set(ladder.jobs) - set(_JOBS)
+    if bad_jobs:
+        raise ConfigError(f"[ladder].jobs unknown job type(s): {', '.join(sorted(bad_jobs))}; "
+                          f"known: {', '.join(_JOBS)}")
+    allowed = set(_RUNGS) | {"default"}
+    bad_vals = {v for v in ladder.jobs.values() if v not in allowed}
+    if bad_vals:
+        raise ConfigError(f"[ladder].jobs values must be one of {', '.join(sorted(allowed))}; "
+                          f"got: {', '.join(sorted(map(str, bad_vals)))}")

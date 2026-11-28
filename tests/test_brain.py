@@ -252,6 +252,87 @@ def test_carryover_survives_a_roll_and_is_taken_once(cfg):
     assert carry_block([]) == ""
 
 
+class FakeClient:
+    def __init__(self):
+        self.models = []
+
+    async def set_model(self, model):
+        self.models.append(model)
+
+
+def test_apply_model_switches_only_when_the_rung_changes(cfg):
+    brain, _, _ = make_brain(cfg)
+    brain._client = client = FakeClient()
+    brain._model_set = None  # a fresh connection on the unpinned default
+
+    async def go():
+        await brain._apply_model(None)  # same as current: no switch
+        await brain._apply_model("opus")
+        await brain._apply_model("opus")  # unchanged: no second switch
+        await brain._apply_model("sonnet")
+
+    asyncio.run(go())
+    assert client.models == ["opus", "sonnet"]
+    assert brain._model_set == "sonnet"
+
+
+def test_apply_model_fails_soft_on_a_bad_model(cfg):
+    brain, _, _ = make_brain(cfg)
+
+    class Boom(FakeClient):
+        async def set_model(self, model):
+            raise RuntimeError("unknown model")
+
+    brain._client = Boom()
+    brain._model_set = None
+    asyncio.run(brain._apply_model("nope"))  # must not raise
+    assert brain._model_set is None  # stayed on the current model
+
+
+def test_scribe_summary_becomes_the_carryover_on_a_roll(cfg, monkeypatch):
+    from assistant.scribe import ScribeResult
+
+    cfg.brain.gemini_key_file = "key.txt"
+    brain, _, _ = make_brain(cfg)
+    brain.carry.add("local", "add a retry in client.py", "done in client.py")
+
+    async def fake(c, items):
+        return ScribeResult("Summary: fetch in client.py now retries; a test is next.", "ok")
+    monkeypatch.setattr("assistant.scribe.summarize", fake)
+
+    async def go():
+        brain._roll("idle")  # marks the carry-over pending
+        await brain._scribe("local")
+        return brain.carry.take("local")
+
+    note = asyncio.run(go())
+    assert "fetch in client.py now retries" in note
+    log_text = (cfg.logs_dir / "audit.jsonl").read_text()
+    assert '"scribe"' in log_text and '"ok"' in log_text
+
+
+def test_scribe_falls_back_to_raw_carryover_when_rejected(cfg, monkeypatch):
+    from assistant.scribe import ScribeResult
+
+    cfg.brain.gemini_key_file = "key.txt"
+    brain, _, _ = make_brain(cfg)
+    brain.carry.add("local", "add a retry in client.py", "done in client.py")
+    monkeypatch.setattr("assistant.scribe.summarize", lambda c, items: _fallback())
+
+    async def go():
+        brain._roll("idle")
+        await brain._scribe("local")
+        return brain.carry.take("local")
+
+    note = asyncio.run(go())
+    assert "add a retry in client.py" in note  # the raw exchange, not a summary
+
+
+async def _fallback():
+    from assistant.scribe import ScribeResult
+    return ScribeResult(None, "fallback")
+
+
 def test_carryover_clips_long_text_and_new_session_clears_it(cfg):
     import asyncio
 

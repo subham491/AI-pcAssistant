@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 from typing import Any, Callable, Protocol
 
-from . import gemini, herald
+from . import gemini, herald, inspector, ladder
 from .audit import AuditLog
 from .brain import ROLL_NOTICE, STEWARD, AuthError, Brain, Carryover, SessionStore, Turn, prepare_auth_env
 from .config import Config, EditMode, take_resume_task
@@ -24,6 +24,7 @@ from .desktop import control, win32
 from .desktop.capture import CaptureError, ScreenCapturer, Shot
 from .diffs import UndoJournal
 from .herald import Rung
+from .treasurer import Treasurer
 from .inbox import InboxSnapshotter, robocopy_command
 from .intents import Kind, ScreenTarget, TargetKind, parse, screen_target
 from .policy import Policy
@@ -60,6 +61,8 @@ class Orchestrator:
         self.capturer = capturer
         self.policy = Policy(cfg)
         self.audit = AuditLog(cfg.logs_dir / "audit.jsonl")
+        self.treasurer = Treasurer(cfg, self.audit.path)
+        self._fix_failed = False  # a risky/code turn ended in doubt; the next such turn starts at Opus
         self.undo = UndoJournal()
         self.sessions = SessionStore(cfg.state_dir / "sessions.json")
         self.carry = Carryover(self.sessions.path.parent / "carryover.json")  # the same file the brains use
@@ -246,9 +249,8 @@ class Orchestrator:
                        and bool(self.cfg.brain.gemini_key_file))
         if can_steward and await self._run_steward(text, decision.reason):
             return
-        rung_reason = decision.reason if decision.rung is Rung.CLAUDE else "steward_fallback"
-        self.audit.write("routed", rung="claude", reason=rung_reason)
-        await self._run_turn(text)
+        reason = decision.reason if decision.rung is Rung.CLAUDE else "steward_fallback"
+        await self._run_turn(text, job=ladder.job_for(decision.reason), reason=reason)
 
     async def _run_steward(self, text: str, reason: str) -> bool:
         """Try to answer directly with Gemini. Return True if it answered; False to fall back to Claude.
@@ -307,7 +309,7 @@ class Orchestrator:
         except OSError:  # a full disk or locked file must not lose the answer
             log.debug("could not write the steward log", exc_info=True)
 
-    async def _run_turn(self, text: str) -> None:
+    async def _run_turn(self, text: str, job: str = "general", reason: str = "general") -> None:
         if self._auth_error is not None:
             # Never fall back silently to another login than the one configured.
             self._report_brain_error(self._auth_error)
@@ -316,7 +318,6 @@ class Orchestrator:
         profile = "remote" if self.policy.remote_mode else "local"
         shots = await self._capture_for(text)
         self.ui.status("thinking", "Thinking…")
-        chunker = SpeechChunker()
         ok = False
 
         def speak(sentences: list[str]) -> None:
@@ -325,14 +326,42 @@ class Orchestrator:
             if sentences:  # with the voice off the sentences are still shown beside the orb, one at a time
                 self.ui.status("speaking", "Speaking…" if self.cfg.voice.tts_enabled else "Answering…")
 
+        # The ladder picks the starting rung (job table + risk + a failed fix); the Treasurer caps it
+        # from above as the budget nears its limit, and a floor keeps code/risky work at Sonnet or up.
+        base = self.cfg.brain.model
+        ceiling = self.treasurer.ceiling(job)
+        rung = ladder.clamp(ladder.start_rung(job, self.cfg.ladder.jobs, base, self._fix_failed),
+                            ceiling, ladder.floor_for(job))
+        if self.treasurer.should_warn():
+            self.treasurer.mark_warned()
+            self._say("Heads up: we're close to the budget cap, so I'm keeping to cheaper models.")
+
+        result = None
         try:
-            result = await self.brain(profile).run_turn(Turn(text, shots), lambda delta: speak(chunker.feed(delta)))
-            speak(chunker.flush())
+            while True:
+                chunker = SpeechChunker()
+                model = ladder.resolve_model(rung, base)
+                result = await self.brain(profile).run_turn(
+                    Turn(text, shots), lambda delta: speak(chunker.feed(delta)), model=model)
+                speak(chunker.flush())
+                self.audit.write("routed", rung=rung, model=model or (base or ladder.DEFAULT_RUNG),
+                                 reason=reason, job=job)
+                trigger = ladder.climb_triggers(result) if self.cfg.ladder.escalate else None
+                if not trigger or ladder.index(rung) >= ladder.index(ceiling):
+                    break
+                if not ladder.retry_safe(result):
+                    break  # the turn already changed something; don't silently redo it, just note the doubt
+                rung = ladder.climb(rung, ceiling)
+                self.ui.activity(f"↑ Escalating to {rung} ({trigger})")
             ok = not result.is_error and not result.interrupted
             if result.is_error and not result.interrupted:
                 self._say("That didn't finish cleanly. The details are in the activity log.")
             if result.rolled:
                 self._say(ROLL_NOTICE)
+            # Remember doubt so the next code/risky turn starts at the Minister (Opus).
+            self._fix_failed = bool(ladder.climb_triggers(result)) and job in ladder.RISKY_JOBS
+            if ok and result.changes and not self.policy.remote_mode and self.cfg.brain.gemini_key_file:
+                await self._inspect(text, result.changes)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -340,6 +369,21 @@ class Orchestrator:
             await self.brain(profile).close()  # reconnect (and resume) on the next turn
         finally:
             self._settle(ok)
+
+    async def _inspect(self, user_request: str, changes: list[str]) -> None:
+        """A model from the other family (Gemini) reviews what Claude just changed. Advice only:
+        spoken briefly and shown via show_code; it never edits or runs anything. Fail soft."""
+        self.ui.activity("Inspector (Gemini) reviewing the change…")
+        finding = await inspector.review(self.cfg, user_request, changes)
+        if finding is None:
+            self.ui.activity("Inspector skipped: Gemini unavailable")
+            return
+        self.audit.write("inspected", reason="code_change", findings=finding, changes=len(changes))
+        self.ui.show_code("Inspector review (Gemini)", finding, "text")
+        chunker = SpeechChunker()
+        for sentence in chunker.feed(finding) + chunker.flush():
+            self.speaker.say(sentence)
+        self.ui.status("speaking", "Speaking…" if self.cfg.voice.tts_enabled else "Answering…")
 
     def _settle(self, ok: bool | None = None) -> None:
         """Go back to "Ready", but only once the voice has finished the answer.

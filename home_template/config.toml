@@ -15,6 +15,30 @@ auth_mode = "subscription"
 #                                  # true = also load the full ~/.claude (all plugin skills + connectors) for heavy
 #                                  # work like Gmail/Drive/docs. Also switchable by voice: "full profile" / "lean profile".
 
+[ladder]
+# The escalation ladder: steward (Gemini) -> haiku -> sonnet (default) -> opus -> fable. A turn starts
+# on the model its job maps to below, and climbs a rung on doubt. All defaults preserve today's
+# behaviour: everything runs on [brain].model and only escalates when something looks wrong.
+# escalate = true                  # false = never climb; always run the job's chosen rung
+# max_rung = "fable"               # the ladder never climbs above this (haiku | sonnet | opus | fable)
+# Job type -> model for the FIRST attempt. "default" = whatever [brain].model is. Known job types:
+# simple, code, risky, action, screen, general. Risky work still starts a rung up and is floored at
+# Sonnet; a fix that already failed once jumps to Opus. Unknown job names or models are rejected.
+# [ladder.jobs]
+# simple = "haiku"                 # quick facts/chit-chat that fell through to Claude
+# code = "sonnet"                  # editing files, debugging
+# risky = "opus"                   # money, logins, deletes, sending
+# general = "default"
+
+[treasurer]
+# Spend caps in US dollars, read from the audit log. 0 = off (the default: observe only). As a cap
+# nears, the assistant warns once by voice and caps the ladder lower (never below Sonnet for
+# code/risky work). See a daily per-rung total with: python -m assistant.treasurer
+# daily_cap_usd = 0                # e.g. 5 to cap the day at $5
+# weekly_cap_usd = 0               # e.g. 25 to cap the week at $25
+# warn_at = 0.8                    # fraction of a cap at which to warn by voice
+# downgrade_at = 0.9               # fraction at which to start downgrading the model
+
 [ui]
 # name = "Hellbot"                 # shown on the orb's card and tray; what the assistant calls itself
 # corner = "bottom-right"          # bottom-right | bottom-left | top-right | top-left (or just drag the orb)

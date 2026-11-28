@@ -41,12 +41,14 @@ class FakeBrain:
     def __init__(self, reply="Done. All good.", hang=False):
         self.reply, self.hang = reply, hang
         self.turns, self.interrupted, self.closed, self.fresh = [], 0, 0, 0
+        self.models = []
 
     async def connect(self):
         pass
 
-    async def run_turn(self, turn, on_delta):
+    async def run_turn(self, turn, on_delta, model=None):
         self.turns.append(turn)
+        self.models.append(model)
         if self.hang:
             await asyncio.sleep(3600)
         on_delta(self.reply)
@@ -340,8 +342,9 @@ def test_steward_falls_back_to_claude_on_refusal(cfg, monkeypatch):
         await orch._turn_task
         assert brains["local"].turns[0].text == "what is the capital of France"  # Claude handled it
         assert speaker.said == ["Done. All good."]
+        # With no [brain].model pinned, a Claude turn lands on the default Knight rung, Sonnet.
         rungs = [e["rung"] for e in _audit_events(cfg) if e["event"] == "routed"]
-        assert rungs == ["claude"]
+        assert rungs == ["sonnet"]
     asyncio.run(go())
 
 
@@ -404,6 +407,132 @@ def test_full_profile_phrase_switches_all_brains_and_config(cfg):
         await orch.handle_text("lean profile")
         assert cfg.brain.full_profile is False and brains["local"].full_profile is False
     asyncio.run(go())
+
+
+class ScriptedBrain:
+    """A brain whose reply depends on the model (rung) it is handed, to drive the ladder."""
+
+    def __init__(self, script):
+        self.script = script  # callable(model) -> TurnResult
+        self.models, self.closed = [], 0
+
+    async def connect(self):
+        pass
+
+    async def run_turn(self, turn, on_delta, model=None):
+        self.models.append(model)
+        result = self.script(model)
+        on_delta(result.text)
+        return result
+
+    async def interrupt(self):
+        pass
+
+    async def close(self):
+        self.closed += 1
+
+    async def new_session(self):
+        pass
+
+    async def set_full_profile(self, full):
+        return True
+
+
+def test_ladder_retries_a_safe_hedge_one_rung_up(cfg):
+    def script(model):
+        if model is None:  # the default Sonnet rung hedges, with no side effects
+            return TurnResult("I'm not sure about that.", changes=[])
+        return TurnResult("It is 42.", changes=[])  # Opus answers
+
+    async def go():
+        orch, speaker, _, brains = make(cfg, brain=ScriptedBrain(script))
+        await started(orch)
+        await orch.handle_text("what is the meaning of life")  # a "simple" -> steward_fallback -> Claude turn
+        await orch._turn_task
+        assert brains["local"].models == [None, "opus"]  # climbed Sonnet -> Opus
+        assert "It is 42." in speaker.said
+        rungs = [e["rung"] for e in _audit_events(cfg) if e["event"] == "routed"]
+        assert rungs == ["sonnet", "opus"]
+    asyncio.run(go())
+
+
+def test_a_changing_turn_in_doubt_is_not_redone_but_escalates_next_time(cfg):
+    results = [TurnResult("tried but it broke", tool_failed=True, changes=["ran: build"]),
+               TurnResult("fixed it", changes=[])]
+
+    async def go():
+        orch, _, _, brains = make(cfg, brain=ScriptedBrain(lambda m: results.pop(0) if results else TurnResult("x")))
+        await started(orch)
+        await orch.handle_text("fix the python traceback")  # a "code" turn that changed something
+        await orch._turn_task
+        assert brains["local"].models == [None]  # not silently re-run (it had side effects)
+        assert orch._fix_failed is True
+        await orch.handle_text("refactor the git branch logic")  # the next code turn starts at the Minister
+        await orch._turn_task
+        assert brains["local"].models[-1] == "opus"
+    asyncio.run(go())
+
+
+def test_budget_pressure_downgrades_a_risky_turn_and_warns(cfg):
+    from datetime import datetime, timezone
+    cfg.treasurer.daily_cap_usd = 1.0
+    today = datetime.now(timezone.utc).isoformat()
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.logs_dir / "audit.jsonl").write_text(
+        __import__("json").dumps({"ts": today, "event": "turn_done", "cost_usd": 0.95,
+                                  "session_cost_usd": 0.95}) + "\n", encoding="utf-8")
+
+    async def go():
+        orch, speaker, _, brains = make(cfg, brain=ScriptedBrain(lambda m: TurnResult("ok", changes=[])))
+        await started(orch)
+        await orch.handle_text("delete the old backups")  # risky: would start at Opus, capped to Sonnet
+        await orch._turn_task
+        # Downgraded from the risky Opus start to the Sonnet floor (logged as the rung; the passed
+        # model is None because Sonnet is the unpinned default, so no needless set_model).
+        rungs = [e["rung"] for e in _audit_events(cfg) if e["event"] == "routed"]
+        assert rungs == ["sonnet"] and brains["local"].models == [None]
+        assert any("budget cap" in s for s in speaker.said)
+    asyncio.run(go())
+
+
+def test_inspector_reviews_a_code_changing_turn(cfg, monkeypatch):
+    cfg.brain.gemini_key_file = "key.txt"
+
+    async def fake_review(c, request, changes):
+        fake_review.seen = (request, list(changes))
+        return "The retry has no backoff."
+    monkeypatch.setattr("assistant.inspector.review", fake_review)
+
+    async def go():
+        brain = ScriptedBrain(lambda m: TurnResult("Added the retry.", changes=["Edit client.py\n+ retry"]))
+        orch, speaker, _, _ = make(cfg, brain=brain)
+        await started(orch)
+        await orch.handle_text("refactor the git branch logic")  # a code turn
+        await orch._turn_task
+        assert fake_review.seen[1] == ["Edit client.py\n+ retry"]
+        assert any(n == "show_code" and a[0] == "Inspector review (Gemini)" for n, a in orch.ui.events)
+        assert "The retry has no backoff." in speaker.said
+        assert any(e["event"] == "inspected" for e in _audit_events(cfg))
+    asyncio.run(go())
+
+
+def test_inspector_fails_soft_when_gemini_is_down(cfg, monkeypatch):
+    cfg.brain.gemini_key_file = "key.txt"
+    monkeypatch.setattr("assistant.inspector.review", lambda *a: _none())
+
+    async def go():
+        brain = ScriptedBrain(lambda m: TurnResult("done", changes=["ran: build"]))
+        orch, speaker, _, _ = make(cfg, brain=brain)
+        await started(orch)
+        await orch.handle_text("run the test suite again")
+        await orch._turn_task
+        assert any(n == "activity" and "Inspector skipped" in a[0] for n, a in orch.ui.events)
+        assert not any("show_code" == n for n, _ in orch.ui.events)
+    asyncio.run(go())
+
+
+async def _none():
+    return None
 
 
 def test_local_reply_shows_speaking_too(cfg):

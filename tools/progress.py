@@ -33,17 +33,18 @@ class Step:
 
 
 STEPS: list[Step] = [
-    Step("p1-profile-design", "Phase 1: lean context", "Design lean vs. full settings profile"),
-    Step("p1-profile-build", "Phase 1: lean context", "Build lean .claude profile (only voice skills + desktop tools)"),
-    Step("p1-profile-switch", "Phase 1: lean context", "Wire default-lean / on-demand-full switch into config + brain"),
-    Step("p1-cache-check", "Phase 1: lean context", "Confirm system prompt header stays stable for prompt caching"),
-    Step("p1-tests", "Phase 1: lean context", "Tests for the lean/full profile switch"),
-    Step("p2-herald", "Phase 2: Herald + Steward", "Herald: free local rule router for turn size/destination"),
-    Step("p2-steward", "Phase 2: Herald + Steward", "Steward: Gemini direct-answer path for simple questions"),
-    Step("p2-fallback", "Phase 2: Herald + Steward", "Fallback to Claude on doubt, tool failure, or refusal-like text"),
-    Step("p2-audit", "Phase 2: Herald + Steward", "Audit log: which rung handled each turn"),
-    Step("p2-wire", "Phase 2: Herald + Steward", "Wire Herald into orchestrator.handle_text"),
-    Step("p2-tests", "Phase 2: Herald + Steward", "Tests for Herald routing + Steward fallback"),
+    Step("p3-ladder-design", "Phase 3: Ladder + Treasurer", "Design escalation ladder (Steward > Haiku > Sonnet > Opus > Fable) and doubt signals"),
+    Step("p3-ladder-build", "Phase 3: Ladder + Treasurer", "Build ladder: escalate one rung on low confidence, tool failure, or risky topic"),
+    Step("p3-config", "Phase 3: Ladder + Treasurer", "Config table: job type to model, per-rung settings"),
+    Step("p3-treasurer", "Phase 3: Ladder + Treasurer", "Treasurer: daily and weekly cost tally from the audit log"),
+    Step("p3-downgrade", "Phase 3: Ladder + Treasurer", "Downgrade or warn as the configured cap nears"),
+    Step("p3-wire", "Phase 3: Ladder + Treasurer", "Wire ladder + Treasurer into the orchestrator and audit log"),
+    Step("p3-tests", "Phase 3: Ladder + Treasurer", "Tests for ladder escalation and Treasurer limits"),
+    Step("p4-inspector-design", "Phase 4: Inspector + Scribe", "Design cross-family review for code-changing and risky turns"),
+    Step("p4-inspector-build", "Phase 4: Inspector + Scribe", "Build Inspector: Gemini reviews Claude's work, advice only"),
+    Step("p4-scribe-build", "Phase 4: Inspector + Scribe", "Build Scribe: Gemini-written session summaries to keep context short"),
+    Step("p4-wire", "Phase 4: Inspector + Scribe", "Wire Inspector and Scribe into orchestrator and session rolls"),
+    Step("p4-tests", "Phase 4: Inspector + Scribe", "Tests for Inspector and Scribe"),
     Step("verify", "Verify", "Full test suite green"),
 ]
 STEP_IDS = [s.id for s in STEPS]
@@ -118,7 +119,7 @@ h1{{font-size:22px;margin-bottom:4px}}h2{{font-size:15px;color:#9ecbff;margin:22
 @keyframes spin{{from{{transform:rotate(0)}}to{{transform:rotate(360deg)}}}}
 .meta{{color:#888;font-size:12px;margin-top:22px}}
 </style>
-<h1>Building the Hellbot kingdom &mdash; Phase 1 &amp; 2</h1>
+<h1>Building the Hellbot kingdom &mdash; Phase 3 &amp; 4</h1>
 <div class="meta">{done}/{total} steps done &middot; {pct}% &middot; last update {updated}</div>
 <div class="bar"><div class="fill"></div></div>
 {body}

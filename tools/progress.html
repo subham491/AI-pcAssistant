@@ -12,22 +12,23 @@ h1{font-size:22px;margin-bottom:4px}h2{font-size:15px;color:#9ecbff;margin:22px 
 @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 .meta{color:#888;font-size:12px;margin-top:22px}
 </style>
-<h1>Building the Hellbot kingdom &mdash; Phase 1 &amp; 2</h1>
-<div class="meta">12/12 steps done &middot; 100% &middot; last update 19:38:25</div>
+<h1>Building the Hellbot kingdom &mdash; Phase 3 &amp; 4</h1>
+<div class="meta">13/13 steps done &middot; 100% &middot; last update 20:47:41</div>
 <div class="bar"><div class="fill"></div></div>
-<h2>Phase 1: lean context</h2>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Design lean vs. full settings profile</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Build lean .claude profile (only voice skills + desktop tools)</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Wire default-lean / on-demand-full switch into config + brain</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Confirm system prompt header stays stable for prompt caching</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Tests for the lean/full profile switch</span><span class="st">done</span></div>
-<h2>Phase 2: Herald + Steward</h2>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Herald: free local rule router for turn size/destination</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Steward: Gemini direct-answer path for simple questions</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Fallback to Claude on doubt, tool failure, or refusal-like text</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Audit log: which rung handled each turn</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Wire Herald into orchestrator.handle_text</span><span class="st">done</span></div>
-<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Tests for Herald routing + Steward fallback</span><span class="st">done</span></div>
+<h2>Phase 3: Ladder + Treasurer</h2>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Design escalation ladder (Steward > Haiku > Sonnet > Opus > Fable) and doubt signals</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Build ladder: escalate one rung on low confidence, tool failure, or risky topic</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Config table: job type to model, per-rung settings</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Treasurer: daily and weekly cost tally from the audit log</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Downgrade or warn as the configured cap nears</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Wire ladder + Treasurer into the orchestrator and audit log</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Tests for ladder escalation and Treasurer limits</span><span class="st">done</span></div>
+<h2>Phase 4: Inspector + Scribe</h2>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Design cross-family review for code-changing and risky turns</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Build Inspector: Gemini reviews Claude's work, advice only</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Build Scribe: Gemini-written session summaries to keep context short</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Wire Inspector and Scribe into orchestrator and session rolls</span><span class="st">done</span></div>
+<div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Tests for Inspector and Scribe</span><span class="st">done</span></div>
 <h2>Verify</h2>
 <div class="row"><span style="color:#7bd88f">&#10003;</span><span class="label" style="color:#7bd88f">Full test suite green</span><span class="st">done</span></div>
-<div class="meta">301 passed (was 250). Phase 1 + 2 complete.</div>
+<div class="meta">341 passed (was 307)</div>

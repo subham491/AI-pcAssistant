@@ -113,6 +113,10 @@ class TurnResult:
     cost_usd: float | None = None
     interrupted: bool = False
     rolled: str | None = None  # why the next turn starts in a fresh session ("context" | "idle"), if it does
+    tool_failed: bool = False  # a tool call failed during the turn (doubt: the ladder may climb)
+    # Short, non-secret summaries of the irreversible things the turn did (file edits, shell commands):
+    # what the Inspector reviews. Empty = the turn was read-only / answer-only (safe to re-run).
+    changes: list[str] = field(default_factory=list)
 
 
 ROLL_NOTICE = "Starting a fresh session to keep costs down."
@@ -232,6 +236,13 @@ def carry_block(exchanges: list[dict[str, str]]) -> str:
             "first:\n" + "\n".join(_carry_line(e) for e in exchanges) + "]\n\n")
 
 
+def scribe_block(summary: str) -> str:
+    """The note a rolled session opens with when the Scribe (Gemini) summarised the old one."""
+    return ("[Carried over from the previous session, which was restarted only to save cost. Same "
+            "conversation: continue naturally, do not mention the restart. A summary of what was going "
+            "on:\n" + summary.strip() + "]\n\n")
+
+
 STEWARD = "steward"  # Carryover "by" tag: answered directly by the Steward (Gemini), without Claude
 
 
@@ -301,6 +312,19 @@ class Carryover:
         data[profile] = entry
         self._save(data)
 
+    def items(self, profile: str) -> list[dict[str, Any]]:
+        """The remembered exchanges (user + reply), oldest first. What the Scribe summarises."""
+        return list(self._entry(self._load(), profile)["items"])
+
+    def set_summary(self, profile: str, summary: str) -> None:
+        """Store the Scribe's summary of the recent exchanges; the next pending take() uses it instead
+        of the raw clipped lines, then clears it."""
+        data = self._load()
+        entry = self._entry(data, profile)
+        entry["summary"] = summary
+        data[profile] = entry
+        self._save(data)
+
     def take(self, profile: str) -> str:
         """The note for a freshly rolled session, once; empty if no roll is waiting.
 
@@ -310,7 +334,12 @@ class Carryover:
         unseen = [e for e in entry["items"] if e.get("unseen")]
         if not entry["pending"] and not unseen:
             return ""
-        note = carry_block(entry["items"]) if entry["pending"] else aside_block(unseen)
+        if entry["pending"]:
+            # A roll is waiting: prefer the Scribe's summary if one was written, else the raw exchanges.
+            summary = entry.pop("summary", "")
+            note = scribe_block(summary) if summary else carry_block(entry["items"])
+        else:
+            note = aside_block(unseen)
         entry["pending"] = False
         for e in unseen:
             del e["unseen"]
@@ -355,6 +384,9 @@ class Brain:
         self._cost_seen = 0.0  # SDK total_cost_usd already accounted for on this connection
         self._steps: set[str] = set()  # tool calls the UI has been told about and that are still running
         self._full_profile = bool(cfg.brain.full_profile)  # lean by default; "full profile" flips it
+        self._model_set: str | None = cfg.brain.model  # the model the live connection is on (see _apply_model)
+        self._turn_changes: list[str] = []  # irreversible actions in the turn now running (for the Inspector)
+        self._turn_tool_failed = False
 
     # -- options ---------------------------------------------------------
 
@@ -405,6 +437,7 @@ class Brain:
             resume = None
             if self._idle_expired():
                 self._roll("idle")
+                await self._scribe(self.profile)
             if self.cfg.brain.resume_last_session and not self._fresh_next:
                 resume = self.sessions.get(self.profile)
             self._fresh_next = False
@@ -421,7 +454,38 @@ class Brain:
                 await client.connect()
             self._client = client
             self._cost_seen = 0.0  # total_cost_usd restarts with every CLI process, resumed or not
+            self._model_set = self.cfg.brain.model  # a fresh connection is on the options' model
             self.audit.write("session_connected", profile=self.profile, resumed=resume)
+
+    async def _apply_model(self, model: str | None) -> None:
+        """Put the live session on `model` for the coming query (None = the session's default).
+
+        The SDK's set_model changes the model on the running streaming connection, so a per-turn rung
+        change (see ladder.py) costs no new connection. Fail soft: if it is refused, the turn still
+        runs on the current model rather than being lost."""
+        if model == self._model_set or self._client is None:
+            return
+        try:
+            await self._client.set_model(model)
+            self._model_set = model
+        except Exception:  # noqa: BLE001 - a bad/unknown model name must not lose the turn
+            log.warning("could not switch model to %r; staying on %r", model, self._model_set, exc_info=True)
+
+    async def _scribe(self, profile: str) -> None:
+        """When a session rolls, let Gemini write a short summary note for the fresh session to open
+        with, instead of only the clipped raw exchanges. Privacy: only the already-clipped user/assistant
+        text goes to Gemini — no screenshots, files or secrets. Fail soft: on any error the existing
+        Carryover (the raw exchanges) is used unchanged."""
+        if not self.cfg.brain.gemini_key_file:
+            return
+        from . import scribe  # local import keeps brain free of a hard Gemini dependency
+
+        result = await scribe.summarize(self.cfg, self.carry.items(profile))
+        if result.outcome == "skip":
+            return
+        if result.note:
+            self.carry.set_summary(profile, result.note)  # else: fall back to the raw Carryover
+        self.audit.write("scribe", profile=profile, outcome=result.outcome, chars=len(result.note or ""))
 
     async def close(self) -> None:
         if self._client is not None:
@@ -490,11 +554,14 @@ class Brain:
         return (f"[voice turn | edit mode: {self.policy.edit_mode.value} | "
                 f"remote mode: {'on' if self.profile == 'remote' else 'off'} | screenshots: {len(turn.shots)}]")
 
-    async def run_turn(self, turn: Turn, on_sentence_delta: Callable[[str], None]) -> TurnResult:
+    async def run_turn(self, turn: Turn, on_sentence_delta: Callable[[str], None],
+                       model: str | None = None) -> TurnResult:
         if self._client is not None and self._idle_expired():
             await self.close()  # connect() below rolls it
         await self.connect()
         assert self._client is not None
+        await self._apply_model(model)  # the ladder's chosen rung for this turn
+        self._turn_changes, self._turn_tool_failed = [], False
         said = turn.text
         message = build_user_message(Turn(self.carry.take(self.profile) + turn.text, turn.shots),
                                      self._header(turn))
@@ -557,6 +624,8 @@ class Brain:
             on_sentence_delta(f" Wintermute fallback activated. {buddy_summary}")
 
         result.text = "\n\n".join(texts)
+        result.tool_failed = self._turn_tool_failed
+        result.changes = list(self._turn_changes)
         self.audit.write("turn_done", profile=self.profile, is_error=result.is_error, cost_usd=result.cost_usd,
                          session_cost_usd=session_cost,
                          usage=usage, context_tokens=context, models=models, shots=len(turn.shots))
@@ -566,6 +635,7 @@ class Brain:
         if roll_reason(context, None, self.cfg.brain.max_context_tokens, 0):
             await self.close()
             self._roll("context", context)
+            await self._scribe(self.profile)
         result.rolled, self._rolled = self._rolled, None
         return result
 
@@ -616,15 +686,33 @@ class Brain:
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision.action,
                                        "permissionDecisionReason": decision.reason}}
 
+    def _record_change(self, name: str, tool_input: dict[str, Any]) -> None:
+        """Keep a short, non-secret summary of an irreversible action for the Inspector to review."""
+        if name in FILE_EDIT_TOOLS:
+            path = tool_input.get("file_path") or tool_input.get("notebook_path") or "?"
+            if name == "Edit":
+                detail = f"- {_clip(str(tool_input.get('old_string', '')), 200)}\n+ {_clip(str(tool_input.get('new_string', '')), 200)}"
+            elif name == "Write":
+                detail = _clip(str(tool_input.get("content", "")), 400)
+            else:
+                detail = ""
+            self._turn_changes.append(f"{name} {path}\n{detail}".rstrip())
+        elif name in ("Bash", "PowerShell"):
+            command = str(tool_input.get("command", ""))
+            if command and not self.policy.command_allow_listed(command):  # skip read-only commands
+                self._turn_changes.append(f"ran: {_clip(command, 300)}")
+
     async def _post_tool_use(self, hook_input: Any, tool_use_id: str | None, _ctx: Any) -> dict[str, Any]:
         response = hook_input.get("tool_response")
         self.audit.write("tool_result", tool=hook_input.get("tool_name"), tool_use_id=tool_use_id,
                          response=response if isinstance(response, (str, dict, list)) else str(response))
+        self._record_change(hook_input.get("tool_name", ""), hook_input.get("tool_input") or {})
         self._step_finished(tool_use_id, True)
         return {}
 
     async def _post_tool_failure(self, hook_input: Any, tool_use_id: str | None, _ctx: Any) -> dict[str, Any]:
         error = str(hook_input.get("error") or "failed")
+        self._turn_tool_failed = True
         self.audit.write("tool_failed", tool=hook_input.get("tool_name"), tool_use_id=tool_use_id, error=error)
         first_line = error.strip().splitlines()[0] if error.strip() else "failed"
         self.ui.activity(f"✗ {hook_input.get('tool_name', 'tool')} failed: {first_line}")
