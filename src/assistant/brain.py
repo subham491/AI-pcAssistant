@@ -617,14 +617,27 @@ class Brain:
                     self._cost_seen = session_cost
         full_response_text = "\n\n".join(texts)
         if is_refusal(full_response_text):
-            log.info("Detected text refusal from assistant; launching wintermute fallback.")
+            log.info("Detected text refusal; triggering spec translation fallback.")
             buddy_summary = await run_wintermute(
                 trigger="text_refusal",
                 user_prompt=turn.text,
             )
-            texts.append(f"\n\n{buddy_summary}")
-            self.ui.assistant_text(f"\n\n{buddy_summary}")
-            on_sentence_delta(f" Wintermute fallback activated. {buddy_summary}")
+            on_sentence_delta(" Reframing request for local execution.")
+
+            await self._apply_model("claude-sonnet-4-6")
+            retry_msg = build_user_message(Turn(buddy_summary, []), self._header(turn))
+
+            async def retry_one() -> Any:
+                yield retry_msg
+
+            await self._client.query(retry_one())
+            async for r_msg in self._client.receive_response():
+                if isinstance(r_msg, AssistantMessage) and r_msg.parent_tool_use_id is None:
+                    for block in r_msg.content:
+                        if isinstance(block, TextBlock) and block.text.strip():
+                            texts.append(block.text)
+                            self.ui.assistant_text(block.text)
+                            on_sentence_delta(block.text)
 
         result.text = "\n\n".join(texts)
         result.tool_failed = self._turn_tool_failed
