@@ -28,6 +28,8 @@ class Kind(str, Enum):
     PULL_PROJECT = "pull_project"
     REMEMBER = "remember"
     NEW_SESSION = "new_session"
+    FULL_PROFILE = "full_profile"  # load the full ~/.claude (all connectors/plugins) for heavy work
+    LEAN_PROFILE = "lean_profile"  # back to the lean voice profile (project skills + desktop only)
     TURN = "turn"  # anything else: send to Claude
 
 
@@ -57,6 +59,10 @@ _NEW = {"new conversation", "start over", "new session", "fresh start", "reset c
         "new connection", "a new connection", "a new conversation"}  # the last ones: what Whisper heard for it
 _REMOTE_ON = {"remote mode", "switch to remote mode", "remote mode on", "enter remote mode", "go remote"}
 _REMOTE_OFF = {"local mode", "exit remote mode", "leave remote mode", "remote mode off", "switch to local mode"}
+_FULL_PROFILE = {"full profile", "full profile mode", "full power", "full power mode", "load everything",
+                 "load the full profile", "use the full profile", "all connectors", "all my connectors"}
+_LEAN_PROFILE = {"lean profile", "lean profile mode", "lean mode", "light profile", "back to lean",
+                 "lean context", "lean settings"}
 
 _MODE_PATTERNS: list[tuple[re.Pattern[str], EditMode]] = [
     (re.compile(r"^(switch to |set |use |go to )?(suggest|suggestion|suggest only|suggestions only)( only)?( mode)?$"),
@@ -89,6 +95,10 @@ def parse(text: str) -> Intent:
         return Intent(Kind.REMOTE_ON)
     if norm in _REMOTE_OFF:
         return Intent(Kind.REMOTE_OFF)
+    if norm in _FULL_PROFILE:
+        return Intent(Kind.FULL_PROFILE)
+    if norm in _LEAN_PROFILE:
+        return Intent(Kind.LEAN_PROFILE)
     for pattern, mode in _MODE_PATTERNS:
         if pattern.match(norm):
             return Intent(Kind.SET_EDIT_MODE, edit_mode=mode)

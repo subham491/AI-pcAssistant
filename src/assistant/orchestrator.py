@@ -16,12 +16,14 @@ import logging
 from datetime import datetime
 from typing import Any, Callable, Protocol
 
+from . import gemini, herald
 from .audit import AuditLog
-from .brain import ROLL_NOTICE, AuthError, Brain, SessionStore, Turn, prepare_auth_env
-from .config import Config, EditMode
+from .brain import ROLL_NOTICE, STEWARD, AuthError, Brain, Carryover, SessionStore, Turn, prepare_auth_env
+from .config import Config, EditMode, take_resume_task
 from .desktop import control, win32
 from .desktop.capture import CaptureError, ScreenCapturer, Shot
 from .diffs import UndoJournal
+from .herald import Rung
 from .inbox import InboxSnapshotter, robocopy_command
 from .intents import Kind, ScreenTarget, TargetKind, parse, screen_target
 from .policy import Policy
@@ -60,6 +62,7 @@ class Orchestrator:
         self.audit = AuditLog(cfg.logs_dir / "audit.jsonl")
         self.undo = UndoJournal()
         self.sessions = SessionStore(cfg.state_dir / "sessions.json")
+        self.carry = Carryover(self.sessions.path.parent / "carryover.json")  # the same file the brains use
         self.inbox = InboxSnapshotter(cfg)
         self._foreground_process = foreground_process
         self._brain_factory = brain_factory or _default_brain_factory
@@ -89,6 +92,20 @@ class Orchestrator:
             return
         # Connect early so the first spoken turn does not pay the start-up cost.
         asyncio.create_task(self._warm_up())
+        await self._resume_pending()
+
+    async def _resume_pending(self) -> None:
+        """Continue a task left behind before a restart (see config.schedule_resume), if there is one.
+
+        The file is consumed before the turn starts, so a crash cannot replay the same task forever. Its
+        text then takes the same path as anything the user says.
+        """
+        text = take_resume_task(self.cfg)
+        if not text:
+            return
+        self.audit.write("auto_resume", chars=len(text))
+        self._say("Picking up where I left off.")
+        await self.handle_text(text, source="auto_resume")
 
     async def _warm_up(self) -> None:
         try:
@@ -173,7 +190,10 @@ class Orchestrator:
                 await self.stop()
             for b in self._brains.values():
                 await b.new_session()
+            self.carry.clear("local")  # Steward exchanges too, even if no Claude session exists yet
             self._say("Starting a fresh conversation.")
+        elif intent.kind in (Kind.FULL_PROFILE, Kind.LEAN_PROFILE):
+            await self._set_full_profile(intent.kind is Kind.FULL_PROFILE)
         else:
             if self.busy:
                 self._say("I'm still on the last request. Say stop to cancel it.")
@@ -181,7 +201,7 @@ class Orchestrator:
             if self._settling is not None:  # the last answer's "Ready" must not land in this turn
                 self._settling.cancel()
                 self._settling = None
-            self._turn_task = asyncio.create_task(self._run_turn(text))
+            self._turn_task = asyncio.create_task(self._run_routed(text))
 
     # ------------------------------------------------------------------
     # turns
@@ -212,6 +232,80 @@ class Orchestrator:
             return []
         self.ui.activity("Captured: " + ", ".join(s.label for s in shots))
         return shots
+
+    async def _run_routed(self, text: str) -> None:
+        """The Herald decides the turn's size, then the cheapest capable rung handles it.
+
+        Simple, factual turns go to the Steward (Gemini, direct, free of Claude). Everything else —
+        and any Steward miss — becomes a normal Claude Code turn. Every turn logs which rung handled
+        it ("routed"), groundwork for the Treasurer's per-rung tally in a later phase.
+        """
+        decision = herald.route(text)
+        # The Steward only answers low-stakes text, never remote screens, and needs a Gemini key.
+        can_steward = (decision.rung is Rung.STEWARD and not self.policy.remote_mode
+                       and bool(self.cfg.brain.gemini_key_file))
+        if can_steward and await self._run_steward(text, decision.reason):
+            return
+        rung_reason = decision.reason if decision.rung is Rung.CLAUDE else "steward_fallback"
+        self.audit.write("routed", rung="claude", reason=rung_reason)
+        await self._run_turn(text)
+
+    async def _run_steward(self, text: str, reason: str) -> bool:
+        """Try to answer directly with Gemini. Return True if it answered; False to fall back to Claude.
+
+        Privacy: only the user's own words go to Gemini — never a screenshot, note or file (the Herald
+        has already kept screen/code/risky turns on the Claude rung).
+        """
+        self.ui.status("thinking", "Thinking…")
+        prompt = (
+            "You are a concise voice assistant. Answer the user's question in one to three short "
+            "spoken sentences, plain text only (no markdown, lists or code). If you are not sure or "
+            "would need tools, files, the web or the user's screen, reply exactly with "
+            "\"I need to check that.\" so a more capable assistant can take over.\n\n"
+            f"User: {text}"
+        )
+        try:
+            answer = await asyncio.to_thread(
+                gemini.ask, prompt, self.cfg.brain.gemini_key_file, gemini.DEFAULT_MODEL, 30.0
+            )
+        except gemini.GeminiError as exc:
+            self.ui.activity(f"Steward (Gemini) unavailable, using Claude: {exc}")
+            return False
+        except Exception:  # noqa: BLE001 - never let the cheap path lose the turn
+            log.exception("steward failed")
+            return False
+        if herald.looks_like_non_answer(answer):
+            self.ui.activity("Steward was unsure; handing to Claude.")
+            return False
+
+        answer = answer.strip()
+        self.audit.write("routed", rung="steward", reason=reason, model=gemini.DEFAULT_MODEL)
+        self.ui.activity("↯ Steward (Gemini) answered directly")
+        self._log_steward(text, answer)
+        self.ui.assistant_text(answer)
+        chunker = SpeechChunker()
+        sentences = chunker.feed(answer) + chunker.flush()
+        for sentence in (sentences or [answer]):
+            self.speaker.say(sentence)
+        self.ui.status("speaking", "Speaking…" if self.cfg.voice.tts_enabled else "Answering…")
+        self._settle(True)
+        return True
+
+    def _log_steward(self, question: str, answer: str) -> None:
+        """Keep a Steward exchange where Claude and the user can find it later.
+
+        Claude never saw it, so it goes into the carry-over (the next Claude turn opens with it) and,
+        durably, into notes/steward-log.md, which outlives a "new session".
+        """
+        self.carry.add("local", question, answer, by=STEWARD)  # the Steward never runs in remote mode
+        try:
+            path = self.cfg.home / "notes" / "steward-log.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(f"- {datetime.now():%Y-%m-%d %H:%M} | Q: {' '.join(question.split())} "
+                         f"| A (Gemini): {' '.join(answer.split())}\n")
+        except OSError:  # a full disk or locked file must not lose the answer
+            log.debug("could not write the steward log", exc_info=True)
 
     async def _run_turn(self, text: str) -> None:
         if self._auth_error is not None:
@@ -358,6 +452,16 @@ class Orchestrator:
         self.speaker.say(text)
         if not self.busy and self.loop is not None:
             self._settle()
+
+    async def _set_full_profile(self, full: bool) -> None:
+        if self.busy:
+            await self.stop()
+        self.cfg.brain.full_profile = full  # brains created later inherit the choice
+        for b in self._brains.values():
+            await b.set_full_profile(full)
+        self.audit.write("profile_switch", full=full)
+        self._say("Full profile loaded. I now have all your connectors and skills, but turns cost more."
+                  if full else "Back to the lean profile: just the voice skills, to keep turns cheap.")
 
     def _set_edit_mode(self, mode: EditMode, speak: bool) -> None:
         self.policy.edit_mode = mode

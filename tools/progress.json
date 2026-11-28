@@ -1,0 +1,18 @@
+{
+  "status": {
+    "p1-profile-design": "done",
+    "p1-profile-build": "done",
+    "p1-profile-switch": "done",
+    "p1-cache-check": "done",
+    "p1-tests": "done",
+    "p2-herald": "done",
+    "p2-steward": "done",
+    "p2-fallback": "done",
+    "p2-audit": "done",
+    "p2-wire": "done",
+    "p2-tests": "done",
+    "verify": "done"
+  },
+  "updated": "19:38:25",
+  "note": "301 passed (was 250). Phase 1 + 2 complete."
+}

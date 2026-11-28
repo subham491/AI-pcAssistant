@@ -61,6 +61,10 @@ class FakeBrain:
     async def new_session(self):
         self.fresh += 1
 
+    async def set_full_profile(self, full):
+        self.full_profile = full
+        return True
+
 
 def make(cfg, brain=None, fg="Code.exe"):
     brains = {}
@@ -214,6 +218,191 @@ def test_new_request_while_still_speaking_is_not_overwritten_by_the_old_ready(cf
         await asyncio.sleep(0.3)
         assert orch.busy and statuses(orch)[-1] == "thinking"  # not "idle" from the first answer
         await orch.stop()
+    asyncio.run(go())
+
+
+def _audit_events(cfg):
+    import json
+    path = cfg.logs_dir / "audit.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_steward_answers_simple_questions_without_claude(cfg, monkeypatch):
+    cfg.brain.gemini_key_file = "key.txt"  # non-empty: the Steward is allowed to try
+    calls = []
+    monkeypatch.setattr("assistant.gemini.ask",
+                        lambda *a, **k: calls.append(a) or "The capital of France is Paris.")
+
+    async def go():
+        orch, speaker, _, brains = make(cfg)
+        await started(orch)
+        await orch.handle_text("what is the capital of France")
+        await orch._turn_task
+        assert calls  # Gemini was consulted
+        assert speaker.said == ["The capital of France is Paris."]
+        assert brains == {}  # no Claude turn was spun up
+        rungs = [e["rung"] for e in _audit_events(cfg) if e["event"] == "routed"]
+        assert rungs == ["steward"]
+    asyncio.run(go())
+
+
+def test_steward_exchange_is_remembered_for_claude_and_logged(cfg, monkeypatch):
+    cfg.brain.gemini_key_file = "key.txt"
+    monkeypatch.setattr("assistant.gemini.ask", lambda *a, **k: "The capital of France is Paris.")
+
+    async def go():
+        orch, _, _, brains = make(cfg)
+        await started(orch)
+        await orch.handle_text("what is the capital of France")
+        await orch._turn_task
+        assert brains == {}
+        log_text = (cfg.home / "notes" / "steward-log.md").read_text(encoding="utf-8")
+        assert "Q: what is the capital of France" in log_text and "The capital of France is Paris." in log_text
+        assert log_text.count("\n") == 1  # one line per exchange
+        # The next Claude turn opens with it (no roll needed), tagged as not Claude's own answer, once.
+        note = orch.carry.take("local")
+        assert "what is the capital of France" in note and "Paris" in note and "Steward (Gemini" in note
+        assert orch.carry.take("local") == ""
+        # ...and it stays in the carry-over for a later session roll.
+        orch.carry.mark_pending("local")
+        assert "Steward (Gemini, not you): The capital of France is Paris." in orch.carry.take("local")
+    asyncio.run(go())
+
+
+def test_steward_miss_leaves_no_memory_or_log(cfg, monkeypatch):
+    cfg.brain.gemini_key_file = "key.txt"
+    monkeypatch.setattr("assistant.gemini.ask", lambda *a, **k: "I don't have access to that.")
+
+    async def go():
+        orch, _, _, _ = make(cfg)
+        await started(orch)
+        await orch.handle_text("what is the capital of France")
+        await orch._turn_task
+        assert not (cfg.home / "notes" / "steward-log.md").exists()
+        assert orch.carry.take("local") == ""
+    asyncio.run(go())
+
+
+def test_start_resumes_a_pending_task_once(cfg, monkeypatch):
+    from assistant.config import schedule_resume
+
+    monkeypatch.setattr("assistant.orchestrator.prepare_auth_env", lambda mode: None)
+    path = schedule_resume(cfg, "continue the kingdom plan\n")
+    assert path == cfg.state_dir / "resume_task.txt"
+
+    async def go():
+        orch, speaker, _, brains = make(cfg)
+        seen = []
+        handle = orch.handle_text
+
+        async def spy(text, source="voice"):
+            seen.append((text, source, path.exists()))
+            await handle(text, source)
+
+        orch.handle_text = spy
+        await orch.start()
+        await orch._turn_task
+        assert seen == [("continue the kingdom plan", "auto_resume", False)]  # deleted before dispatch
+        assert brains["local"].turns[0].text == "continue the kingdom plan"
+        assert speaker.said[0] == "Picking up where I left off."
+        assert ("transcript", ("continue the kingdom plan",)) in orch.ui.events
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("content", [None, "", "  \n"])
+def test_start_without_a_pending_task_is_unchanged(cfg, monkeypatch, content):
+    monkeypatch.setattr("assistant.orchestrator.prepare_auth_env", lambda mode: None)
+    if content is not None:
+        cfg.state_dir.mkdir(parents=True)
+        cfg.resume_task_file.write_text(content, encoding="utf-8")
+
+    async def go():
+        orch, speaker, _, _ = make(cfg)
+        await orch.start()
+        await asyncio.sleep(0.01)
+        assert orch._turn_task is None and speaker.said == []
+        assert not any(name == "transcript" for name, _ in orch.ui.events)
+        assert statuses(orch) == ["idle"]
+        assert not cfg.resume_task_file.exists()
+    asyncio.run(go())
+
+
+def test_steward_falls_back_to_claude_on_refusal(cfg, monkeypatch):
+    cfg.brain.gemini_key_file = "key.txt"
+    monkeypatch.setattr("assistant.gemini.ask", lambda *a, **k: "I don't have access to that.")
+
+    async def go():
+        orch, speaker, _, brains = make(cfg)
+        await started(orch)
+        await orch.handle_text("what is the capital of France")
+        await orch._turn_task
+        assert brains["local"].turns[0].text == "what is the capital of France"  # Claude handled it
+        assert speaker.said == ["Done. All good."]
+        rungs = [e["rung"] for e in _audit_events(cfg) if e["event"] == "routed"]
+        assert rungs == ["claude"]
+    asyncio.run(go())
+
+
+def test_steward_falls_back_to_claude_when_gemini_errors(cfg, monkeypatch):
+    cfg.brain.gemini_key_file = "key.txt"
+    from assistant import gemini
+
+    def boom(*a, **k):
+        raise gemini.GeminiError("offline")
+
+    monkeypatch.setattr("assistant.gemini.ask", boom)
+
+    async def go():
+        orch, _, _, brains = make(cfg)
+        await started(orch)
+        await orch.handle_text("what is the capital of France")
+        await orch._turn_task
+        assert brains["local"].turns  # fell back to Claude
+    asyncio.run(go())
+
+
+def test_herald_routes_risky_and_code_turns_straight_to_claude(cfg, monkeypatch):
+    cfg.brain.gemini_key_file = "key.txt"
+    called = []
+    monkeypatch.setattr("assistant.gemini.ask", lambda *a, **k: called.append(a) or "x")
+
+    async def go():
+        orch, _, _, brains = make(cfg)
+        await started(orch)
+        await orch.handle_text("delete the old backups")
+        await orch._turn_task
+        assert not called and brains["local"].turns  # Gemini never consulted; Claude handled it
+    asyncio.run(go())
+
+
+def test_no_gemini_key_means_no_steward(cfg, monkeypatch):
+    assert cfg.brain.gemini_key_file == ""  # default: Steward disabled
+    called = []
+    monkeypatch.setattr("assistant.gemini.ask", lambda *a, **k: called.append(a) or "x")
+
+    async def go():
+        orch, _, _, brains = make(cfg)
+        await started(orch)
+        await orch.handle_text("what is the capital of France")
+        await orch._turn_task
+        assert not called and brains["local"].turns
+    asyncio.run(go())
+
+
+def test_full_profile_phrase_switches_all_brains_and_config(cfg):
+    async def go():
+        orch, speaker, _, brains = make(cfg)
+        await started(orch)
+        await orch.handle_text("what is the capital of France")  # spins up the local brain
+        await orch._turn_task
+        await orch.handle_text("full profile")
+        assert cfg.brain.full_profile is True
+        assert brains["local"].full_profile is True
+        assert any("full profile" in s.lower() for s in speaker.said)
+        await orch.handle_text("lean profile")
+        assert cfg.brain.full_profile is False and brains["local"].full_profile is False
     asyncio.run(go())
 
 

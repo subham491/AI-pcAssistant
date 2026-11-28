@@ -48,8 +48,27 @@ class BrainConfig:
     # long session is paid for again in full). 0 = never.
     fresh_after_idle_minutes: float = 240.0
     max_turns: int = 40
-    # Load ~/.claude (user) and <home>/.claude + CLAUDE.md (project).
-    setting_sources: list[str] = field(default_factory=lambda: ["user", "project"])
+    # The settings sources for the default (lean) voice profile. "project" loads <home>/.claude
+    # (the assistant's own skills: tv-remote, window-control, gesture-mouse, restart-self,
+    # explain-screen) and CLAUDE.md. It deliberately omits "user" (~/.claude), which drags in ~200
+    # plugin skills and 30+ connector tool lists into every turn's context, cheap work or not. The
+    # desktop MCP tools are wired in separately and are always available.
+    setting_sources: list[str] = field(default_factory=lambda: ["project"])
+    # False (default) = the lean profile above. True = also load the full ~/.claude profile
+    # (all plugin skills and connectors) for heavy work like Gmail, Drive or docs. Flip it here, or
+    # by voice ("full profile" / "lean profile"); switching starts a fresh session.
+    full_profile: bool = False
+
+    def profile_sources(self, full: bool) -> list[str]:
+        """The settings sources for the lean (default) or full profile.
+
+        Lean = whatever `setting_sources` lists (project only by default). Full adds the user's
+        ~/.claude on top, so a voice command can pull in every connector and plugin on demand.
+        """
+        base = list(self.setting_sources)
+        if full and "user" not in base:
+            base = ["user"] + base
+        return base
 
 
 @dataclass
@@ -226,6 +245,39 @@ class Config:
     @property
     def state_dir(self) -> Path:
         return self.home / ".state"
+
+    @property
+    def resume_task_file(self) -> Path:
+        """A task to continue after a restart: see schedule_resume()."""
+        return self.state_dir / "resume_task.txt"
+
+
+def schedule_resume(cfg: Config, text: str) -> Path:
+    """Leave a task for the next start of the app to pick up (for example before restart-self).
+
+    The format is deliberately trivial so a skill or script can write it without this helper: plain
+    UTF-8 text in <home>/.state/resume_task.txt, the whole file being what the assistant should be told,
+    exactly as if the user had said it. On start the app deletes the file and then runs that text as a
+    normal turn; a missing or empty file means a normal start.
+    """
+    path = cfg.resume_task_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def take_resume_task(cfg: Config) -> str:
+    """Read and delete the pending task; "" if there is none. Deleted first-thing so it runs only once."""
+    path = cfg.resume_task_file
+    try:
+        text = path.read_text(encoding="utf-8-sig", errors="replace")  # utf-8-sig: PowerShell writes a BOM
+    except OSError:
+        return ""
+    try:
+        path.unlink()
+    except OSError:
+        return ""  # cannot be consumed: running it would repeat on every start
+    return text.strip()
 
 
 CORNERS = ("bottom-right", "bottom-left", "top-right", "top-left")

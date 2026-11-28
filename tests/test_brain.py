@@ -109,6 +109,32 @@ def test_model_and_effort_from_config_reach_the_session(cfg):
     assert (opts.model, opts.effort) == ("sonnet", "medium")
 
 
+def test_lean_profile_is_the_default_setting_source(cfg):
+    # The default voice profile skips ~/.claude ("user") so the ~200 plugin skills stay out of context.
+    opts = make_brain(cfg)[0]._options(None)
+    assert list(opts.setting_sources) == ["project"]
+
+
+def test_full_profile_switch_adds_user_source_and_rolls_the_session(cfg):
+    brain = make_brain(cfg)[0]
+    assert brain.full_profile is False
+    brain.sessions.set("local", "sess-1")
+
+    async def go():
+        changed = await brain.set_full_profile(True)
+        assert changed is True
+        assert brain.full_profile is True
+        # A switch invalidates the cached prompt, so the stored session is dropped and the next
+        # connect starts fresh, carrying the recent exchanges over.
+        assert brain.sessions.get("local") is None and brain._fresh_next
+        opts = brain._options(None)
+        assert list(opts.setting_sources) == ["user", "project"]
+        # Flipping to the same value is a no-op.
+        assert await brain.set_full_profile(True) is False
+
+    asyncio.run(go())
+
+
 class StepSink(NullSink):
     def __init__(self):
         self.events = []

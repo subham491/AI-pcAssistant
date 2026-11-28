@@ -10,6 +10,10 @@ auth_mode = "subscription"
 # resume_last_session = true
 # max_context_tokens = 150000      # a turn that ends above this starts the next one in a fresh session; 0 = never
 # fresh_after_idle_minutes = 240   # so does this long without a turn (the cache is cold by then); 0 = never
+# gemini_key_file = 'C:\path\to\gemini-key.txt'  # enables the Steward: simple questions answered cheaply by Gemini
+# full_profile = false             # false (default) = lean voice profile (your skills + desktop tools only, cheap).
+#                                  # true = also load the full ~/.claude (all plugin skills + connectors) for heavy
+#                                  # work like Gmail/Drive/docs. Also switchable by voice: "full profile" / "lean profile".
 
 [ui]
 # name = "Hellbot"                 # shown on the orb's card and tray; what the assistant calls itself

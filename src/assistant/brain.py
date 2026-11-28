@@ -227,10 +227,26 @@ def carry_block(exchanges: list[dict[str, str]]) -> str:
     """The note the first turn of a rolled session starts with, so it knows what was just going on."""
     if not exchanges:
         return ""
-    lines = [f"- User: {e['user']}\n  You: {e['reply']}" for e in exchanges]
     return ("[Carried over from the previous session, which was restarted only to save cost. Same "
             "conversation: continue naturally, do not mention the restart. Most recent exchanges, oldest "
-            "first:\n" + "\n".join(lines) + "]\n\n")
+            "first:\n" + "\n".join(_carry_line(e) for e in exchanges) + "]\n\n")
+
+
+STEWARD = "steward"  # Carryover "by" tag: answered directly by the Steward (Gemini), without Claude
+
+
+def _carry_line(e: dict[str, Any]) -> str:
+    who = "Steward (Gemini, not you)" if e.get("by") == STEWARD else "You"
+    return f"- User: {e['user']}\n  {who}: {e['reply']}"
+
+
+def aside_block(exchanges: list[dict[str, Any]]) -> str:
+    """The note a turn starts with when exchanges happened that this session never saw."""
+    if not exchanges:
+        return ""
+    return ("[Since your last turn the user asked these simple questions and the Steward (a cheap Gemini "
+            "model) answered them aloud without you. Same conversation; the user may refer back to them:\n"
+            + "\n".join(_carry_line(e) for e in exchanges) + "]\n\n")
 
 
 class Carryover:
@@ -264,12 +280,17 @@ class Carryover:
         except OSError:
             log.debug("could not save carry-over", exc_info=True)
 
-    def add(self, profile: str, user: str, reply: str) -> None:
+    def add(self, profile: str, user: str, reply: str, by: str = "") -> None:
+        """Remember one exchange. `by` tags an answer that did not come from Claude (see STEWARD): Claude
+        has not seen it, so the next take() hands it over even without a session roll."""
         if not (user.strip() or reply.strip()):
             return
         data = self._load()
         entry = self._entry(data, profile)
-        entry["items"] = (entry["items"] + [{"user": _clip(user), "reply": _clip(reply)}])[-CARRY_KEEP:]
+        item = {"user": _clip(user), "reply": _clip(reply)}
+        if by:
+            item.update(by=by, unseen=True)
+        entry["items"] = (entry["items"] + [item])[-CARRY_KEEP:]
         data[profile] = entry
         self._save(data)
 
@@ -281,15 +302,21 @@ class Carryover:
         self._save(data)
 
     def take(self, profile: str) -> str:
-        """The note for a freshly rolled session, once; empty if no roll is waiting."""
+        """The note for a freshly rolled session, once; empty if no roll is waiting.
+
+        Without a roll, it is only the exchanges answered without Claude since its last turn (if any)."""
         data = self._load()
         entry = self._entry(data, profile)
-        if not entry["pending"]:
+        unseen = [e for e in entry["items"] if e.get("unseen")]
+        if not entry["pending"] and not unseen:
             return ""
+        note = carry_block(entry["items"]) if entry["pending"] else aside_block(unseen)
         entry["pending"] = False
+        for e in unseen:
+            del e["unseen"]
         data[profile] = entry
         self._save(data)
-        return carry_block(entry["items"])
+        return note
 
     def clear(self, profile: str) -> None:
         data = self._load()
@@ -327,6 +354,7 @@ class Brain:
         self.carry = Carryover(sessions.path.parent / "carryover.json")
         self._cost_seen = 0.0  # SDK total_cost_usd already accounted for on this connection
         self._steps: set[str] = set()  # tool calls the UI has been told about and that are still running
+        self._full_profile = bool(cfg.brain.full_profile)  # lean by default; "full profile" flips it
 
     # -- options ---------------------------------------------------------
 
@@ -336,10 +364,14 @@ class Brain:
             "PATH": f"{shims_dir};{os.environ.get('PATH', '')}",
             "TRUSTMEBRO_REAL_DIR": r"C:\Windows\System32",
         }
+        # The appended system prompt is the same on every turn (name + fixed VOICE_PROMPT, plus the
+        # fixed REMOTE_PROMPT in remote mode): no clock, counter or per-turn text ahead of it, so the
+        # SDK's prompt cache hits. The per-turn bits (edit mode, screenshot count, carry-over) ride in
+        # the user message (see _header / build_user_message), after the cached system prefix.
         append = name_line(self.cfg.ui.name) + VOICE_PROMPT + ("\n\n" + REMOTE_PROMPT if self.profile == "remote" else "")
         opts = ClaudeAgentOptions(
             cwd=str(self.cfg.home),
-            setting_sources=list(self.cfg.brain.setting_sources),  # type: ignore[arg-type]
+            setting_sources=self.cfg.brain.profile_sources(self._full_profile),  # type: ignore[arg-type]
             system_prompt={"type": "preset", "preset": "claude_code", "append": append},
             mcp_servers={"desktop": self.desktop_server},
             permission_mode="default",
@@ -404,6 +436,29 @@ class Brain:
         self.sessions.set(self.profile, None)
         self.carry.clear(self.profile)  # an explicit "new session" is a clean slate
         self._fresh_next = True
+
+    async def set_full_profile(self, full: bool) -> bool:
+        """Switch between the lean and full ~/.claude profile. Returns True if it changed.
+
+        The two profiles load different settings sources, so the current session's cached prompt no
+        longer applies: start a fresh session on the next turn, but carry the last exchanges over so
+        the conversation itself continues.
+        """
+        full = bool(full)
+        if full == self._full_profile:
+            return False
+        self._full_profile = full
+        old = self.sessions.get(self.profile)
+        await self.close()
+        self.sessions.set(self.profile, None)
+        self._fresh_next = True
+        self.carry.mark_pending(self.profile)
+        self.audit.write("profile_switch", profile=self.profile, full=full, old_session=old)
+        return True
+
+    @property
+    def full_profile(self) -> bool:
+        return self._full_profile
 
     def _idle_expired(self) -> bool:
         last = self.sessions.last_used(self.profile)

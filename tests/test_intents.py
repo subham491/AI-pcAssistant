@@ -32,9 +32,12 @@ def test_strip_wake_phrase_with_several_words():
     ("Reject.", Kind.REJECT), ("no", Kind.REJECT),
     ("undo that", Kind.UNDO), ("start over", Kind.NEW_SESSION),
     ("remote mode", Kind.REMOTE_ON), ("exit remote mode", Kind.REMOTE_OFF),
+    ("full profile", Kind.FULL_PROFILE), ("Load everything.", Kind.FULL_PROFILE),
+    ("lean profile", Kind.LEAN_PROFILE), ("back to lean", Kind.LEAN_PROFILE),
     ("pull her project", Kind.PULL_PROJECT), ("Pull the project.", Kind.PULL_PROJECT),
     ("stop the server on port 3000", Kind.TURN),  # contains "stop" but is a real request
     ("why is this test failing", Kind.TURN),
+    ("full profile picture of the problem", Kind.TURN),  # a real request that merely contains the phrase
 ])
 def test_kinds(text, kind):
     assert parse(text).kind is kind

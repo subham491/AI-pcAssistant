@@ -44,6 +44,23 @@ def test_shipped_template_parses():
     assert cfg.remote.project_name == "sister-project"
 
 
+def test_lean_profile_is_the_default(tmp_path):
+    cfg = load_config(tmp_path)
+    assert cfg.brain.full_profile is False
+    # Lean = project only: the user's ~200 plugin skills and connectors (the "user" source) stay out.
+    assert cfg.brain.setting_sources == ["project"]
+    assert cfg.brain.profile_sources(False) == ["project"]
+    # On demand, the full profile adds ~/.claude back on top.
+    assert cfg.brain.profile_sources(True) == ["user", "project"]
+
+
+def test_profile_sources_does_not_duplicate_user(tmp_path):
+    write(tmp_path, '[brain]\nsetting_sources = ["user", "project"]\nfull_profile = true\n')
+    cfg = load_config(tmp_path)
+    assert cfg.brain.profile_sources(True) == ["user", "project"]
+    assert cfg.brain.profile_sources(False) == ["user", "project"]
+
+
 def test_click_to_talk_defaults_and_ui_section(tmp_path):
     cfg = load_config(tmp_path)
     assert cfg.voice.wake_word_enabled is False  # mic stays off until the click
