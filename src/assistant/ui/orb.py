@@ -46,8 +46,8 @@ LOOKS = {
 REACH = 1.9  # a blob influences the field out to this many radii
 ISO = (1 - 1 / REACH**2) ** 3  # so that a lone blob's edge sits exactly at its radius
 
-BODY_TOP = np.array([86.0, 70.0, 104.0])
-BODY_BOTTOM = np.array([26.0, 18.0, 36.0])
+BODY_TOP = np.array([58.0, 50.0, 78.0])  # obsidian armour, cold at the top
+BODY_BOTTOM = np.array([10.0, 8.0, 18.0])
 
 
 @dataclass(frozen=True)
@@ -91,9 +91,10 @@ def render_smoke(size: int, scale: float, blobs: list[tuple[float, float, float]
 
     shade = np.clip(((x + y) - (CX + CY - 2 * R)) / (4 * R), 0, 1)[..., None]  # top-left light
     rgb = BODY_TOP * (1 - shade) + BODY_BOTTOM * shade
-    rim = (np.clip((1.5 - field) / 0.5, 0, 1) * body)[..., None] * (1 - shade)
-    rgb = rgb + 40 * rim
     glow_rgb = np.array(glow, dtype=np.float32)
+    rim_w = (np.clip((1.6 - field) / 0.6, 0, 1) * body)[..., None]
+    rgb = rgb + 40 * rim_w * (1 - shade)  # cold highlight on the lit side
+    rgb = rgb * (1 - 0.75 * rim_w) + glow_rgb * 0.75 * rim_w  # molten edge light all round
     if heat > 0 and blobs:
         hx, hy, hr = blobs[0]  # the head: lit from inside, below the eyes
         d = np.sqrt((x - hx) ** 2 + (y - (hy + 0.25 * hr)) ** 2) / hr
@@ -158,10 +159,12 @@ def blobs_for(look: str, t: float, level: float, since: float, trail: bool = Fal
     lift = 4 * level if look == "listening" else 0.0
     cy = CY + bob(look, since)
     blobs = [(CX, cy, r)]
-    # Horns: a base blob and a smaller tip each, leaning outwards.
+    # Crown of horns: a tall pair (base, mid, sharp tip) and a short outer pair, leaning outwards.
     for side in (-1, 1):
-        blobs.append((CX + side * 0.56 * r, cy - 0.86 * r - lift * 0.4, 0.27 * r))
-        blobs.append((CX + side * 0.80 * r, cy - 1.22 * r - lift, 0.16 * r))
+        blobs.append((CX + side * 0.52 * r, cy - 0.84 * r - lift * 0.4, 0.30 * r))
+        blobs.append((CX + side * 0.72 * r, cy - 1.20 * r - lift * 0.7, 0.20 * r))
+        blobs.append((CX + side * 0.92 * r, cy - 1.62 * r - lift, 0.11 * r))
+        blobs.append((CX + side * 0.98 * r, cy - 0.30 * r, 0.16 * r))  # shoulder spike
 
     if look == "done" and since < 1.6:
         p = since / 1.6  # one small celebratory wisp
@@ -276,8 +279,34 @@ class Orb(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.drawImage(0, 0, self._image)
+        self._paint_aura(p, t, level, look)
         self._paint_eyes(p, t, level, since)
         p.end()
+
+    def _paint_aura(self, p: QPainter, t: float, level: float, look: Look) -> None:
+        """Power rings and orbiting embers around the head; faster and brighter the harder it works."""
+        if self.look == "asleep":
+            return  # asleep: just the smoke, no power showing
+        speed = {"listening": 1.6, "thinking": 2.6, "answer": 1.2, "done": 1.0, "error": 0.4}.get(self.look, 1.0)
+        base = QColor(*look.glow)
+        cy = CY + bob(self.look, time.monotonic() - self._look_since)
+        for i, (rad, span, width, a) in enumerate(((R * 1.55, 80, 1.6, 200), (R * 1.78, 50, 1.2, 150), (R * 2.0, 30, 1.0, 100))):
+            col = QColor(base)
+            col.setAlpha(int(a * (0.7 + 0.3 * level)))
+            p.setPen(QPen(col, width, Qt.SolidLine, Qt.RoundCap))
+            p.setBrush(Qt.NoBrush)
+            rect = QRectF(CX - rad, cy - rad, 2 * rad, 2 * rad)
+            start = (t * 60 * speed * (1 if i % 2 == 0 else -1) + i * 120) % 360
+            for k in range(3):  # three arc segments per ring, like a rotating shield
+                p.drawArc(rect, int((start + k * 120) * 16), int(span * 16))
+        p.setPen(Qt.NoPen)
+        for i in range(7):  # embers circling the head
+            ang = t * 0.9 * speed + i * (2 * math.pi / 7)
+            rad = R * (1.45 + 0.25 * math.sin(t * 1.7 + i))
+            ember = QColor(255, 220, 150)
+            ember.setAlpha(int(230 * (0.5 + 0.5 * math.sin(t * 3 + i * 1.3)) ** 2 + 25))
+            p.setBrush(ember)
+            p.drawEllipse(QPointF(CX + rad * math.cos(ang), cy + 0.8 * rad * math.sin(ang)), 1.6, 1.6)
 
     def _paint_eyes(self, p: QPainter, t: float, level: float, since: float) -> None:
         colour = QColor(LOOK[self.look].eye)
@@ -317,6 +346,9 @@ class Orb(QWidget):
             path.quadTo(ex - w / 2, top + h, ex - w / 2, top - side * 0.9)
             p.setBrush(colour)
             p.drawPath(path)
+            core = QColor(255, 244, 220)  # white-hot centre
+            p.setBrush(core)
+            p.drawEllipse(QPointF(ex, top + h * 0.45), w * 0.22, max(0.6, h * 0.2))
 
     # -- mouse ---------------------------------------------------------------
 
